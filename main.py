@@ -73,6 +73,213 @@ def add_footer():
     [LinkedIn](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
     """)
 
+def load_data(uploaded_file):
+    """
+    Loads data from the uploaded file based on its extension.
+    """
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    if file_extension == 'csv':
+        return pd.read_csv(uploaded_file)
+    elif file_extension in ['xlsx', 'xls']:
+        return pd.read_excel(uploaded_file)
+    elif file_extension == 'tsv':
+        return pd.read_csv(uploaded_file, sep='\t')
+    elif file_extension == 'txt':
+        return pd.read_csv(uploaded_file, sep='\n', header=None, names=['text'])
+    else:
+        raise ValueError("Unsupported file type.")
+
+def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_range, alpha):
+    """
+    Performs the characteristic words analysis and returns the result DataFrame.
+    """
+    # Initialize frequency dictionaries
+    overall_freq = {}
+    category_freq = {}
+    category_counts = {}
+    total_terms = 0
+
+    # For unigrams only: map stem to original words
+    stem2original = {}
+
+    categories = df[category_col].dropna().unique()
+    for cat in categories:
+        category_freq[cat] = {}
+        category_counts[cat] = 0
+
+    for idx, row in df.iterrows():
+        cat = row[category_col]
+        text = str(row[text_col])
+        terms, original_tokens = preprocess_text(
+            text,
+            lang=lang_choice,
+            remove_stopwords=remove_sw,
+            stemmer=SnowballStemmer(lang_choice),
+            ngram_range=ngram_range,
+            stop_words=stopwords.words(lang_choice) if remove_sw else None
+        )
+
+        # If unigrams only, track original forms for each stem
+        if ngram_range == 1:
+            for stemmed_token, orig in zip([term.split("_")[0] for term in terms], original_tokens):
+                if stemmed_token not in stem2original:
+                    stem2original[stemmed_token] = {}
+                stem2original[stemmed_token][orig] = stem2original[stemmed_token].get(orig, 0) + 1
+
+        for t in terms:
+            overall_freq[t] = overall_freq.get(t, 0) + 1
+            category_freq[cat][t] = category_freq[cat].get(t, 0) + 1
+        category_counts[cat] += len(terms)
+        total_terms += len(terms)
+
+    # Exclude hapax (global frequency = 1)
+    overall_freq = {k: v for k, v in overall_freq.items() if v > 1}
+
+    # Remove hapax from category frequencies
+    for cat in categories:
+        category_freq[cat] = {k: v for k, v in category_freq[cat].items() if overall_freq.get(k, 0) > 1}
+
+    # If unigrams only, replace stems with most frequent original forms in final results
+    stem2repr = find_most_frequent_original_forms(stem2original) if ngram_range == 1 else {}
+
+    # Prepare lists for multiple testing correction
+    all_pvals = []
+    all_terms = []
+    all_cats = []
+    all_x = []
+    all_K = []
+    all_n = []
+
+    for cat in categories:
+        n = category_counts[cat]
+        cat_vocab = category_freq[cat]
+        for t in cat_vocab:
+            x = cat_vocab[t]
+            K = overall_freq[t]
+
+            # Hypergeometric test
+            pval_over = hypergeom.sf(x-1, total_terms, K, n)
+            pval_under = hypergeom.cdf(x, total_terms, K, n)
+            pval = min(pval_over, pval_under)
+
+            all_pvals.append(pval)
+            all_terms.append(t)
+            all_cats.append(cat)
+            all_x.append(x)
+            all_K.append(K)
+            all_n.append(n)
+
+    # Multiple testing correction
+    pvals_array = np.array(all_pvals)
+    reject, pvals_corrected, _, _ = multipletests(pvals_array, alpha=alpha, method='fdr_bh')
+
+    # Compute test-value = log2((x/n)/(K/M))
+    final_data = []
+    for i in range(len(all_terms)):
+        t = all_terms[i]
+        cat = all_cats[i]
+        x = all_x[i]
+        K = all_K[i]
+        n = all_n[i]
+        pval = pvals_corrected[i]
+
+        # Compute test-value
+        epsilon = 1e-9  # To avoid division by zero
+        term_ratio = (x / (n + epsilon))
+        global_ratio = (K / (total_terms + epsilon))
+        test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
+
+        # Get representative form if unigrams only
+        if ngram_range == 1:
+            stem = t.split("_")[0]
+            term_repr = stem2repr.get(stem, t)
+        else:
+            term_repr = t
+
+        final_data.append({
+            "Category": cat,
+            "Term": term_repr,
+            "Internal Frequency": x,
+            "Global Frequency": K,
+            "Test-Value": round(test_val, 4),
+            "P-Value": round(pval, 6),
+            "Significant": "Yes" if reject[i] else "No"
+        })
+
+    result_df = pd.DataFrame(final_data)
+
+    # Sort results by category and p-value
+    result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
+
+    return result_df, categories, total_terms
+
+def visualize_results(result_df, categories):
+    """
+    Generates horizontal bar plots for the most characteristic words per category.
+    """
+    st.write("### 📊 Most Characteristic Words per Category")
+    for cat in categories:
+        subset = result_df[(result_df['Category'] == cat) & (result_df['Significant'] == "Yes")]
+        if subset.empty:
+            st.write(f"No significant characteristic words found for category **{cat}**.")
+            continue
+        # Select top 10 based on absolute test value
+        subset = subset.reindex(subset['Test-Value'].abs().sort_values(ascending=False).index)
+        top_subset = subset.head(10)
+
+        fig = px.bar(
+            top_subset,
+            x="Test-Value",
+            y="Term",
+            orientation='h',
+            title=f"Top Characteristic Words for Category: {cat}",
+            labels={"Test-Value": "Test Value", "Term": "Word"},
+            height=400
+        )
+        fig.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+
+def display_results(result_df, total_terms, categories, alpha):
+    """
+    Displays the results table and summary statistics.
+    """
+    st.write("### 📄 Characteristic Words Table")
+    st.dataframe(result_df)
+
+    # Visualization
+    visualize_results(result_df, categories)
+
+    # Summary statistics
+    st.write("### 📈 Summary Statistics")
+    st.write(f"**Total Terms in Corpus (excluding hapax):** {total_terms}")
+    st.write(f"**Number of Categories:** {len(categories)}")
+    st.write(f"**Significance Level (alpha):** {alpha}")
+
+def download_results(result_df):
+    """
+    Provides download buttons for CSV and Excel formats.
+    """
+    st.write("### ⬇️ Download Results")
+    # CSV download
+    csv_buffer = StringIO()
+    result_df.to_csv(csv_buffer, index=False)
+    st.download_button(
+        label="📥 Download Results as CSV",
+        data=csv_buffer.getvalue(),
+        file_name="characteristic_words.csv",
+        mime="text/csv"
+    )
+    # Excel download
+    excel_buffer = BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
+    st.download_button(
+        label="📥 Download Results as Excel",
+        data=excel_buffer.getvalue(),
+        file_name="characteristic_words.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 def main():
     st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
     st.title("📊 Characteristic Words Detection in Corpus Linguistics")
@@ -96,20 +303,7 @@ def main():
     
     if uploaded_file is not None:
         try:
-            file_extension = uploaded_file.name.split('.')[-1].lower()
-            if file_extension == 'csv':
-                df = pd.read_csv(uploaded_file)
-            elif file_extension in ['xlsx', 'xls']:
-                df = pd.read_excel(uploaded_file)
-            elif file_extension == 'tsv':
-                df = pd.read_csv(uploaded_file, sep='\t')
-            elif file_extension == 'txt':
-                df = pd.read_csv(uploaded_file, sep='\n', header=None)
-                df.columns = ['text']
-            else:
-                st.sidebar.error("⚠️ Unsupported file type.")
-                st.stop()
-            
+            df = load_data(uploaded_file)
             st.sidebar.success("✅ File uploaded successfully!")
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
@@ -162,193 +356,25 @@ def main():
                 st.header("🔍 Analysis Results")
                 st.write("### Processing...")
                 with st.spinner("🕒 Analyzing the corpus..."):
-                    # Initialize frequency dictionaries
-                    overall_freq = {}
-                    category_freq = {}
-                    category_counts = {}
-                    total_terms = 0
-
-                    # For unigrams only: map stem to original words
-                    stem2original = {}
-
-                    categories = df[category_col].dropna().unique()
-                    for cat in categories:
-                        category_freq[cat] = {}
-                        category_counts[cat] = 0
-
-                    for idx, row in df.iterrows():
-                        cat = row[category_col]
-                        text = str(row[text_col])
-                        terms, original_tokens = preprocess_text(
-                            text, lang=stemmer_lang, remove_stopwords=remove_sw,
-                            stemmer=stemmer, ngram_range=ngram_range, stop_words=stop_words
-                        )
-
-                        # If unigrams only, track original forms for each stem
-                        if ngram_range == 1:
-                            # Map each stemmed token to original tokens to find representatives
-                            for stemmed_token, orig in zip([term.split("_")[0] for term in terms], original_tokens):
-                                if stemmed_token not in stem2original:
-                                    stem2original[stemmed_token] = {}
-                                stem2original[stemmed_token][orig] = stem2original[stemmed_token].get(orig, 0) + 1
-
-                        for t in terms:
-                            overall_freq[t] = overall_freq.get(t, 0) + 1
-                            category_freq[cat][t] = category_freq[cat].get(t, 0) + 1
-                        category_counts[cat] += len(terms)
-                        total_terms += len(terms)
-
-                    # Exclude hapax (global frequency = 1)
-                    overall_freq = {k: v for k, v in overall_freq.items() if v > 1}
-
-                    # Remove hapax from category frequencies
-                    for cat in categories:
-                        category_freq[cat] = {k: v for k, v in category_freq[cat].items() if overall_freq.get(k, 0) > 1}
-
-                    # If unigrams only, replace stems with most frequent original forms in final results
-                    if ngram_range == 1:
-                        stem2repr = find_most_frequent_original_forms(stem2original)
-                    else:
-                        stem2repr = {}  # Not used for n-grams
-
-                    # Perform Hypergeometric tests
-                    # M = total_terms
-                    M = total_terms
-                    results = []
-
-                    # Prepare lists for multiple testing correction
-                    all_pvals = []
-                    all_terms = []
-                    all_cats = []
-                    all_x = []
-                    all_K = []
-                    all_n = []
+                    result_df, categories, total_terms = perform_analysis(
+                        df,
+                        text_col,
+                        category_col,
+                        remove_sw,
+                        chosen_lang,
+                        ngram_range,
+                        alpha
+                    )
                     
-                    for cat in categories:
-                        n = category_counts[cat]
-                        cat_vocab = category_freq[cat]
-                        for t in cat_vocab:
-                            x = cat_vocab[t]
-                            K = overall_freq[t]
-                            
-                            # Hypergeometric test
-                            # Probability of seeing at least x occurrences:
-                            pval_over = hypergeom.sf(x-1, M, K, n)
-                            # Probability of seeing at most x occurrences:
-                            pval_under = hypergeom.cdf(x, M, K, n)
-                            pval = min(pval_over, pval_under)
+                    display_results(result_df, total_terms, categories, alpha)
+                    download_results(result_df)
 
-                            all_pvals.append(pval)
-                            all_terms.append(t)
-                            all_cats.append(cat)
-                            all_x.append(x)
-                            all_K.append(K)
-                            all_n.append(n)
-
-                    # Multiple testing correction
-                    pvals_array = np.array(all_pvals)
-                    reject, pvals_corrected, _, _ = multipletests(pvals_array, alpha=alpha, method='fdr_bh')
-
-                    # Compute test-value = log2((x/n)/(K/M))
-                    # Avoid division by zero:
-                    # If x=0, (x/n) = 0, test-value = large negative
-                    # If K=0 (can't happen after processing), skip.
-                    final_data = []
-                    for i in range(len(all_terms)):
-                        t = all_terms[i]
-                        cat = all_cats[i]
-                        x = all_x[i]
-                        K = all_K[i]
-                        n = all_n[i]
-                        pval = pvals_corrected[i]
-
-                        # Compute test-value
-                        # Add a small epsilon to avoid division by zero errors
-                        epsilon = 1e-9
-                        term_ratio = (x / (n + epsilon))
-                        global_ratio = (K / (M + epsilon))
-                        test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
-
-                        # Get representative form if unigrams only
-                        if ngram_range == 1:
-                            stem = t.split("_")[0]
-                            term_repr = stem2repr.get(stem, t)
-                        else:
-                            term_repr = t
-
-                        final_data.append({
-                            "Category": cat,
-                            "Term": term_repr,
-                            "Internal Frequency": x,
-                            "Global Frequency": K,
-                            "Test-Value": round(test_val, 4),
-                            "P-Value": round(pval, 6),
-                            "Significant": "Yes" if reject[i] else "No"
-                        })
-
-                    result_df = pd.DataFrame(final_data)
-
-                    # Sort results by category and p-value
-                    result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
-
-                    st.success("✅ Analysis Complete!")
-
-                    st.write("### 📄 Characteristic Words Table")
-                    st.dataframe(result_df)
-
-                    # Visualization: Horizontal Bar Plots using Plotly
-                    st.write("### 📊 Most Characteristic Words per Category")
-                    for cat in categories:
-                        subset = result_df[(result_df['Category'] == cat) & (result_df['Significant'] == "Yes")]
-                        if subset.empty:
-                            st.write(f"No significant characteristic words found for category **{cat}**.")
-                            continue
-                        # Select top 10 based on absolute test value
-                        subset = subset.reindex(subset['Test-Value'].abs().sort_values(ascending=False).index)
-                        top_subset = subset.head(10)
-
-                        fig = px.bar(
-                            top_subset,
-                            x="Test-Value",
-                            y="Term",
-                            orientation='h',
-                            title=f"Top Characteristic Words for Category: {cat}",
-                            labels={"Test-Value": "Test Value", "Term": "Word"},
-                            height=400
-                        )
-                        fig.update_layout(yaxis={'categoryorder':'total ascending'})
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    # Provide summary statistics
-                    st.write("### 📈 Summary Statistics")
-                    st.write(f"**Total Terms in Corpus (excluding hapax):** {M}")
-                    st.write(f"**Number of Categories:** {len(categories)}")
-                    st.write(f"**Significance Level (alpha):** {alpha}")
-
-                    # Download buttons
-                    st.write("### ⬇️ Download Results")
-                    # CSV download
-                    csv_buffer = StringIO()
-                    result_df.to_csv(csv_buffer, index=False)
-                    st.download_button(
-                        label="📥 Download Results as CSV",
-                        data=csv_buffer.getvalue(),
-                        file_name="characteristic_words.csv",
-                        mime="text/csv"
-                    )
-                    # Excel download
-                    excel_buffer = BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
-                    st.download_button(
-                        label="📥 Download Results as Excel",
-                        data=excel_buffer.getvalue(),
-                        file_name="characteristic_words.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-        else:
-            st.sidebar.info("📥 Awaiting file upload.")
+        except ValueError as ve:
+            st.sidebar.error(f"⚠️ {ve}")
+        except Exception as e:
+            st.sidebar.error(f"⚠️ Error processing the uploaded file: {e}")
+    else:
+        st.sidebar.info("📥 Awaiting file upload.")
 
 # Run the main function and add footer
 if __name__ == "__main__":
