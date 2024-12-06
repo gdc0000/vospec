@@ -121,6 +121,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_r
 
         # If unigrams only, track original forms for each stem
         if ngram_range == 1:
+            # Map each stemmed token to original tokens to find representatives
             for stemmed_token, orig in zip([term.split("_")[0] for term in terms], original_tokens):
                 if stemmed_token not in stem2original:
                     stem2original[stemmed_token] = {}
@@ -174,6 +175,9 @@ def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_r
     reject, pvals_corrected, _, _ = multipletests(pvals_array, alpha=alpha, method='fdr_bh')
 
     # Compute test-value = log2((x/n)/(K/M))
+    # Avoid division by zero:
+    # If x=0, (x/n) = 0, test-value = large negative
+    # If K=0 (can't happen after processing), skip.
     final_data = []
     for i in range(len(all_terms)):
         t = all_terms[i]
@@ -184,7 +188,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_r
         pval = pvals_corrected[i]
 
         # Compute test-value
-        epsilon = 1e-9  # To avoid division by zero
+        # Add a small epsilon to avoid division by zero errors
+        epsilon = 1e-9
         term_ratio = (x / (n + epsilon))
         global_ratio = (K / (total_terms + epsilon))
         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
@@ -288,8 +293,6 @@ def main():
     **Introduction**
 
     Corpus linguistics involves the study and analysis of large collections of texts (corpora) to understand language use, patterns, and structures. One key aspect of corpus linguistics is identifying **characteristic words**, which are terms that appear with unusually high or low frequency in specific subsets of a corpus compared to the entire corpus. These characteristic words help in distinguishing between different text groups, revealing underlying themes, biases, or distinctive features.
-
-    According to Lebart, Salem, and Berry (1997), exploring textual data involves not only quantitative analysis of word frequencies but also qualitative interpretation to gain deeper insights into the text's content and context.
 
     **Reference**
 
