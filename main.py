@@ -127,7 +127,7 @@ def main():
             # Stemmer
             # If user selected a language for stopwords, we also use that language for stemming.
             # If no stopwords chosen, default to English stemmer.
-            stemmer_lang = chosen_lang if chosen_lang in LANGUAGES.values() else "english"
+            stemmer_lang = chosen_lang if remove_sw else "english"
             try:
                 stemmer = SnowballStemmer(stemmer_lang)
             except ValueError as ve:
@@ -242,8 +242,9 @@ def main():
                         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
 
                         # Get representative form if unigrams only
-                        if ngram_range == 1 and t in stem2repr:
-                            term_repr = stem2repr[t]
+                        if ngram_range == 1:
+                            stem = t.split("_")[0]
+                            term_repr = stem2repr.get(stem, t)
                         else:
                             term_repr = t
 
@@ -281,11 +282,12 @@ def main():
                         mime="text/csv"
                     )
 
-        else:
-            st.info("Awaiting CSV file to be uploaded.")
+        except Exception as e:
+            st.error(f"Error processing the uploaded file: {e}")
+    else:
+        st.info("Awaiting CSV file to be uploaded.")
 
-    # Run the main function
+# Run the main function
+if __name__ == "__main__":
     main()
-
-    # Add the footer at the end
     add_footer()
