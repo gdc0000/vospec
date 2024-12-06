@@ -4,3 +4,5 @@ numpy
 nltk
 scipy
 statsmodels
+plotly
+openpyxl
