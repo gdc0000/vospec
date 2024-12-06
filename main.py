@@ -11,10 +11,15 @@ from io import StringIO, BytesIO
 import math
 import plotly.express as px
 
-# Ensure NLTK resources are available (do this once in your environment)
-# nltk.download('punkt')
-# nltk.download('stopwords')
+# Ensure NLTK resources are available
+@st.cache_resource
+def download_nltk_resources():
+    nltk.download('punkt')
+    nltk.download('stopwords')
 
+download_nltk_resources()
+
+# Supported languages and their corresponding NLTK stopwords
 LANGUAGES = {
     "English": "english",
     "French": "french",
@@ -23,6 +28,9 @@ LANGUAGES = {
 }
 
 def preprocess_text(text, lang, remove_stopwords, stemmer, ngram_range, stop_words):
+    """
+    Tokenizes, removes stopwords, stems, and generates n-grams from the input text.
+    """
     # Tokenization
     tokens = word_tokenize(text.lower())
     # Keep only alphabetic tokens
@@ -45,6 +53,9 @@ def preprocess_text(text, lang, remove_stopwords, stemmer, ngram_range, stop_wor
     return final_terms, tokens
 
 def find_most_frequent_original_forms(stem2original):
+    """
+    For each stem, find the most frequent original word form.
+    """
     stem2repr = {}
     for stem, counts in stem2original.items():
         # Pick the original form with highest frequency
@@ -53,6 +64,9 @@ def find_most_frequent_original_forms(stem2original):
     return stem2repr
 
 def add_footer():
+    """
+    Adds a footer with personal information and social links.
+    """
     st.markdown("---")
     st.markdown("### **Gabriele Di Cicco, PhD in Social Psychology**")
     st.markdown("""
@@ -61,7 +75,11 @@ def add_footer():
     [LinkedIn](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
     """)
 
+@st.cache_data
 def load_data(uploaded_file):
+    """
+    Loads data from the uploaded file based on its extension.
+    """
     file_extension = uploaded_file.name.split('.')[-1].lower()
     if file_extension == 'csv':
         return pd.read_csv(uploaded_file)
@@ -75,6 +93,9 @@ def load_data(uploaded_file):
         raise ValueError("Unsupported file type.")
 
 def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_range, alpha):
+    """
+    Performs the characteristic words analysis and returns the result DataFrame.
+    """
     # Set up stopwords and stemmer
     stop_words = set(stopwords.words(LANGUAGES[chosen_lang])) if remove_sw else None
     stemmer = SnowballStemmer(LANGUAGES[chosen_lang])
@@ -96,8 +117,12 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         cat = row[category_col]
         text = str(row[text_col])
         terms, original_tokens = preprocess_text(
-            text, lang=chosen_lang, remove_stopwords=remove_sw,
-            stemmer=stemmer, ngram_range=ngram_range, stop_words=stop_words
+            text,
+            lang=chosen_lang,
+            remove_stopwords=remove_sw,
+            stemmer=stemmer,
+            ngram_range=ngram_range,
+            stop_words=stop_words
         )
 
         if ngram_range == 1:
@@ -163,6 +188,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         n = all_n[i]
         pval = pvals_corrected[i]
 
+        # Compute test-value
         epsilon = 1e-9
         term_ratio = x / (n + epsilon)
         global_ratio = K / (total_terms + epsilon)
@@ -189,6 +215,9 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
     return result_df, categories, total_terms
 
 def visualize_results(result_df, categories):
+    """
+    Generates horizontal bar plots for the most characteristic words per category.
+    """
     st.write("### 📊 Most Characteristic Words per Category")
     for cat in categories:
         subset = result_df[(result_df['Category'] == cat) & (result_df['Significant'] == "Yes")]
@@ -211,6 +240,9 @@ def visualize_results(result_df, categories):
         st.plotly_chart(fig, use_container_width=True)
 
 def display_results(result_df, total_terms, categories, alpha):
+    """
+    Displays the results table and summary statistics.
+    """
     st.write("### 📄 Characteristic Words Table")
     st.dataframe(result_df)
     visualize_results(result_df, categories)
@@ -220,7 +252,11 @@ def display_results(result_df, total_terms, categories, alpha):
     st.write(f"**Significance Level (alpha):** {alpha}")
 
 def download_results(result_df):
+    """
+    Provides download buttons for CSV and Excel formats.
+    """
     st.write("### ⬇️ Download Results")
+    # CSV download
     csv_buffer = StringIO()
     result_df.to_csv(csv_buffer, index=False)
     st.download_button(
@@ -229,6 +265,7 @@ def download_results(result_df):
         file_name="characteristic_words.csv",
         mime="text/csv"
     )
+    # Excel download
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
         result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
@@ -240,6 +277,9 @@ def download_results(result_df):
     )
 
 def main():
+    """
+    Main function to run the Streamlit app.
+    """
     st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
     st.title("📊 Characteristic Words Detection in Corpus Linguistics")
 
