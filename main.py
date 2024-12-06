@@ -7,10 +7,9 @@ from nltk.stem.snowball import SnowballStemmer
 from nltk import word_tokenize
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
-from io import StringIO
+from io import StringIO, BytesIO
 import math
 import plotly.express as px
-import os
 
 # Ensure NLTK resources are downloaded
 nltk.download('punkt', quiet=True)
@@ -97,7 +96,7 @@ def main():
     
     if uploaded_file is not None:
         try:
-            file_extension = uploaded_file.name.split('.')[-1]
+            file_extension = uploaded_file.name.split('.')[-1].lower()
             if file_extension == 'csv':
                 df = pd.read_csv(uploaded_file)
             elif file_extension in ['xlsx', 'xls']:
@@ -111,7 +110,7 @@ def main():
                 st.sidebar.error("Unsupported file type.")
                 st.stop()
             
-            st.sidebar.success("File uploaded successfully!")
+            st.sidebar.success("✅ File uploaded successfully!")
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
 
@@ -122,15 +121,15 @@ def main():
 
             # Choose stopword removal
             st.sidebar.write("### Stopword Removal")
-            remove_sw = st.sidebar.checkbox("Remove stopwords?", value=False)
+            remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             lang_choice = None
             if remove_sw:
-                lang_choice = st.sidebar.selectbox("Select language for stopwords", list(LANGUAGES.keys()))
+                lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
                 chosen_lang = LANGUAGES[lang_choice]
                 try:
                     stop_words = set(stopwords.words(chosen_lang))
                 except Exception as e:
-                    st.sidebar.error(f"Error loading stopwords for {lang_choice}: {e}")
+                    st.sidebar.error(f"⚠️ Error loading stopwords for {lang_choice}: {e}")
                     stop_words = None
             else:
                 stop_words = None
@@ -152,17 +151,17 @@ def main():
             try:
                 stemmer = SnowballStemmer(stemmer_lang)
             except ValueError as ve:
-                st.sidebar.error(f"Stemming not supported for language '{stemmer_lang}': {ve}")
+                st.sidebar.error(f"⚠️ Stemming not supported for language '{stemmer_lang}': {ve}")
                 stemmer = SnowballStemmer("english")
 
             # Significance level
-            alpha = st.sidebar.number_input("Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
+            alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
             
             # Run Analysis Button
             if st.sidebar.button("🚀 Run Analysis"):
                 st.header("🔍 Analysis Results")
                 st.write("### Processing...")
-                with st.spinner("Analyzing the corpus..."):
+                with st.spinner("🕒 Analyzing the corpus..."):
                     # Initialize frequency dictionaries
                     overall_freq = {}
                     category_freq = {}
@@ -292,7 +291,7 @@ def main():
                     # Sort results by category and p-value
                     result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
 
-                    st.success("Analysis Complete!")
+                    st.success("✅ Analysis Complete!")
 
                     st.write("### 📄 Characteristic Words Table")
                     st.dataframe(result_df)
@@ -326,19 +325,32 @@ def main():
                     st.write(f"**Number of Categories:** {len(categories)}")
                     st.write(f"**Significance Level (alpha):** {alpha}")
 
-                    # Download button
+                    # Download buttons
+                    st.write("### ⬇️ Download Results")
+                    # CSV download
                     csv_buffer = StringIO()
                     result_df.to_csv(csv_buffer, index=False)
                     st.download_button(
-                        label="⬇️ Download Results as CSV",
+                        label="📥 Download Results as CSV",
                         data=csv_buffer.getvalue(),
                         file_name="characteristic_words.csv",
                         mime="text/csv"
+                    )
+                    # Excel download
+                    excel_buffer = BytesIO()
+                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                        result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
+                    st.download_button(
+                        label="📥 Download Results as Excel",
+                        data=excel_buffer.getvalue(),
+                        file_name="characteristic_words.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
         else:
             st.sidebar.info("📥 Awaiting file upload.")
 
-    if __name__ == "__main__":
-        main()
-        add_footer()
+# Run the main function and add footer
+if __name__ == "__main__":
+    main()
+    add_footer()
