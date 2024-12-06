@@ -9,8 +9,10 @@ from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 from io import StringIO
 import math
+import plotly.express as px
+import os
 
-# Download NLTK data if not present
+# Ensure NLTK resources are downloaded
 nltk.download('punkt', quiet=True)
 nltk.download('stopwords', quiet=True)
 
@@ -73,50 +75,71 @@ def add_footer():
     """)
 
 def main():
-    st.title("Characteristic Words Detection")
+    st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
+    st.title("📊 Characteristic Words Detection in Corpus Linguistics")
 
-    st.write("""
-    This application detects characteristic words in different segments of your corpus based on a categorical grouping. 
-    Upload your data, configure the preprocessing options, and run the analysis to obtain insightful results.
+    st.markdown("""
+    **Introduction**
+
+    Corpus linguistics involves the study and analysis of large collections of texts (corpora) to understand language use, patterns, and structures. One key aspect of corpus linguistics is identifying **characteristic words**, which are terms that appear with unusually high or low frequency in specific subsets of a corpus compared to the entire corpus. These characteristic words help in distinguishing between different text groups, revealing underlying themes, biases, or distinctive features.
+
+    According to Lebart, Salem, and Berry (1997), exploring textual data involves not only quantitative analysis of word frequencies but also qualitative interpretation to gain deeper insights into the text's content and context.
+
+    **Reference**
+
+    Lebart, L., Salem, A., & Berry, L. (1997). *Exploring textual data*. Springer.
     """)
 
-    st.write("### Upload Your Data")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    st.sidebar.header("🔧 Configuration")
+
+    # File uploader in sidebar
+    uploaded_file = st.sidebar.file_uploader("📂 Upload Your Data", type=["csv", "xlsx", "tsv", "txt"])
+    
     if uploaded_file is not None:
         try:
-            df = pd.read_csv(uploaded_file)
-            st.success("File uploaded successfully!")
-            st.write("#### Data Preview:")
-            st.dataframe(df.head())
-
-            # Ensure required columns exist
-            if df.empty:
-                st.error("The uploaded CSV is empty.")
-                return
+            file_extension = uploaded_file.name.split('.')[-1]
+            if file_extension == 'csv':
+                df = pd.read_csv(uploaded_file)
+            elif file_extension in ['xlsx', 'xls']:
+                df = pd.read_excel(uploaded_file)
+            elif file_extension == 'tsv':
+                df = pd.read_csv(uploaded_file, sep='\t')
+            elif file_extension == 'txt':
+                df = pd.read_csv(uploaded_file, sep='\n', header=None)
+                df.columns = ['text']
+            else:
+                st.sidebar.error("Unsupported file type.")
+                st.stop()
+            
+            st.sidebar.success("File uploaded successfully!")
+            st.sidebar.write("### Data Preview:")
+            st.sidebar.dataframe(df.head())
 
             # Let user select text and category columns
-            st.write("### Configuration")
-            text_col = st.selectbox("Select the text column", df.columns)
-            category_col = st.selectbox("Select the category column", df.columns)
+            st.sidebar.write("### Select Columns")
+            text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
+            category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
             # Choose stopword removal
-            remove_sw = st.checkbox("Remove stopwords?", value=False)
+            st.sidebar.write("### Stopword Removal")
+            remove_sw = st.sidebar.checkbox("Remove stopwords?", value=False)
             lang_choice = None
             if remove_sw:
-                lang_choice = st.selectbox("Select language for stopwords", list(LANGUAGES.keys()))
+                lang_choice = st.sidebar.selectbox("Select language for stopwords", list(LANGUAGES.keys()))
                 chosen_lang = LANGUAGES[lang_choice]
                 try:
                     stop_words = set(stopwords.words(chosen_lang))
                 except Exception as e:
-                    st.error(f"Error loading stopwords for {lang_choice}: {e}")
+                    st.sidebar.error(f"Error loading stopwords for {lang_choice}: {e}")
                     stop_words = None
             else:
                 stop_words = None
                 chosen_lang = "english"  # Default for stemmer if no stopwords chosen
 
             # Choose n-gram range
-            ngram_option = st.radio("N-grams to consider", 
-                                    ["Unigrams only", "Unigrams + Bigrams", "Unigrams + Bigrams + Trigrams"])
+            st.sidebar.write("### N-gram Selection")
+            ngram_option = st.sidebar.radio("Select N-grams to consider", 
+                                        ["Unigrams only", "Unigrams + Bigrams", "Unigrams + Bigrams + Trigrams"])
             if ngram_option == "Unigrams only":
                 ngram_range = 1
             elif ngram_option == "Unigrams + Bigrams":
@@ -125,20 +148,19 @@ def main():
                 ngram_range = 3
 
             # Stemmer
-            # If user selected a language for stopwords, we also use that language for stemming.
-            # If no stopwords chosen, default to English stemmer.
             stemmer_lang = chosen_lang if remove_sw else "english"
             try:
                 stemmer = SnowballStemmer(stemmer_lang)
             except ValueError as ve:
-                st.error(f"Stemming not supported for language '{stemmer_lang}': {ve}")
+                st.sidebar.error(f"Stemming not supported for language '{stemmer_lang}': {ve}")
                 stemmer = SnowballStemmer("english")
 
             # Significance level
-            alpha = st.number_input("Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
+            alpha = st.sidebar.number_input("Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
             
             # Run Analysis Button
-            if st.button("Run Analysis"):
+            if st.sidebar.button("🚀 Run Analysis"):
+                st.header("🔍 Analysis Results")
                 st.write("### Processing...")
                 with st.spinner("Analyzing the corpus..."):
                     # Initialize frequency dictionaries
@@ -176,6 +198,13 @@ def main():
                             category_freq[cat][t] = category_freq[cat].get(t, 0) + 1
                         category_counts[cat] += len(terms)
                         total_terms += len(terms)
+
+                    # Exclude hapax (global frequency = 1)
+                    overall_freq = {k: v for k, v in overall_freq.items() if v > 1}
+
+                    # Remove hapax from category frequencies
+                    for cat in categories:
+                        category_freq[cat] = {k: v for k, v in category_freq[cat].items() if overall_freq.get(k, 0) > 1}
 
                     # If unigrams only, replace stems with most frequent original forms in final results
                     if ngram_range == 1:
@@ -263,12 +292,37 @@ def main():
                     # Sort results by category and p-value
                     result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
 
-                    st.write("### Results")
+                    st.success("Analysis Complete!")
+
+                    st.write("### 📄 Characteristic Words Table")
                     st.dataframe(result_df)
 
+                    # Visualization: Horizontal Bar Plots using Plotly
+                    st.write("### 📊 Most Characteristic Words per Category")
+                    for cat in categories:
+                        subset = result_df[(result_df['Category'] == cat) & (result_df['Significant'] == "Yes")]
+                        if subset.empty:
+                            st.write(f"No significant characteristic words found for category **{cat}**.")
+                            continue
+                        # Select top 10 based on absolute test value
+                        subset = subset.reindex(subset['Test-Value'].abs().sort_values(ascending=False).index)
+                        top_subset = subset.head(10)
+
+                        fig = px.bar(
+                            top_subset,
+                            x="Test-Value",
+                            y="Term",
+                            orientation='h',
+                            title=f"Top Characteristic Words for Category: {cat}",
+                            labels={"Test-Value": "Test Value", "Term": "Word"},
+                            height=400
+                        )
+                        fig.update_layout(yaxis={'categoryorder':'total ascending'})
+                        st.plotly_chart(fig, use_container_width=True)
+
                     # Provide summary statistics
-                    st.write("### Summary Statistics")
-                    st.write(f"**Total Terms in Corpus:** {M}")
+                    st.write("### 📈 Summary Statistics")
+                    st.write(f"**Total Terms in Corpus (excluding hapax):** {M}")
                     st.write(f"**Number of Categories:** {len(categories)}")
                     st.write(f"**Significance Level (alpha):** {alpha}")
 
@@ -276,18 +330,15 @@ def main():
                     csv_buffer = StringIO()
                     result_df.to_csv(csv_buffer, index=False)
                     st.download_button(
-                        label="Download Results as CSV",
+                        label="⬇️ Download Results as CSV",
                         data=csv_buffer.getvalue(),
                         file_name="characteristic_words.csv",
                         mime="text/csv"
                     )
 
-        except Exception as e:
-            st.error(f"Error processing the uploaded file: {e}")
-    else:
-        st.info("Awaiting CSV file to be uploaded.")
+        else:
+            st.sidebar.info("📥 Awaiting file upload.")
 
-# Run the main function
-if __name__ == "__main__":
-    main()
-    add_footer()
+    if __name__ == "__main__":
+        main()
+        add_footer()
