@@ -1,53 +1,56 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem.snowball import SnowballStemmer
-from nltk import word_tokenize
+import spacy
+from spacy.cli import download as spacy_download
+from spacy.lang.en.stop_words import STOP_WORDS as EN_STOP_WORDS
+from spacy.lang.fr.stop_words import STOP_WORDS as FR_STOP_WORDS
+from spacy.lang.it.stop_words import STOP_WORDS as IT_STOP_WORDS
+from spacy.lang.es.stop_words import STOP_WORDS as ES_STOP_WORDS
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 from io import StringIO, BytesIO
 import math
 import plotly.express as px
 
-# Ensure NLTK resources are downloaded
-nltk.download('punkt', quiet=True)
-nltk.download('stopwords', quiet=True)
-
-# Supported languages for stopwords and stemming
+# Supported languages and their corresponding spaCy models and stopwords
 LANGUAGES = {
-    "English": "english",
-    "French": "french",
-    "Italian": "italian",
-    "Spanish": "spanish"
+    "English": {"model": "en_core_web_sm", "stop_words": EN_STOP_WORDS},
+    "French": {"model": "fr_core_news_sm", "stop_words": FR_STOP_WORDS},
+    "Italian": {"model": "it_core_news_sm", "stop_words": IT_STOP_WORDS},
+    "Spanish": {"model": "es_core_news_sm", "stop_words": ES_STOP_WORDS}
 }
 
-def preprocess_text(text, lang, remove_stopwords, stemmer, ngram_range, stop_words):
+def load_spacy_model(language):
     """
-    Tokenizes, removes stopwords, stems, and generates n-grams from the input text.
+    Loads the spaCy model for the specified language. Downloads the model if not present.
     """
-    # Tokenize
-    tokens = word_tokenize(text.lower())
-    # Keep only alphabetic tokens
-    tokens = [t for t in tokens if t.isalpha()]
+    model_name = LANGUAGES[language]["model"]
+    try:
+        nlp = spacy.load(model_name)
+    except OSError:
+        with st.spinner(f"🔄 Downloading spaCy model for {language}..."):
+            spacy_download(model_name)
+        nlp = spacy.load(model_name)
+    return nlp
 
-    # Remove stopwords if requested
+def preprocess_text(text, nlp, remove_stopwords, ngram_range, stop_words):
+    """
+    Tokenizes, removes stopwords, lemmatizes, and generates n-grams from the input text.
+    """
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if token.is_alpha]
+    
     if remove_stopwords and stop_words is not None:
-        tokens = [t for t in tokens if t not in stop_words]
-
-    # Stem tokens
-    stemmed_tokens = [stemmer.stem(t) for t in tokens]
-
+        tokens = [token for token in tokens if token not in stop_words]
+    
     # Generate n-grams
-    # ngram_range = 1 → unigrams only
-    # ngram_range = 2 → unigrams + bigrams
-    # ngram_range = 3 → unigrams + bigrams + trigrams
     final_terms = []
     for n in range(1, ngram_range + 1):
-        for i in range(len(stemmed_tokens) - n + 1):
-            ngram = "_".join(stemmed_tokens[i:i+n])
+        for i in range(len(tokens) - n + 1):
+            ngram = "_".join(tokens[i:i+n])
             final_terms.append(ngram)
+    
     return final_terms, tokens
 
 def find_most_frequent_original_forms(stem2original):
@@ -89,7 +92,7 @@ def load_data(uploaded_file):
     else:
         raise ValueError("Unsupported file type.")
 
-def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_range, alpha):
+def perform_analysis(df, text_col, category_col, nlp, remove_sw, ngram_range, alpha, stop_words):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
     """
@@ -112,16 +115,14 @@ def perform_analysis(df, text_col, category_col, remove_sw, lang_choice, ngram_r
         text = str(row[text_col])
         terms, original_tokens = preprocess_text(
             text,
-            lang=lang_choice,
+            nlp=nlp,
             remove_stopwords=remove_sw,
-            stemmer=SnowballStemmer(lang_choice),
             ngram_range=ngram_range,
-            stop_words=stopwords.words(lang_choice) if remove_sw else None
+            stop_words=stop_words
         )
 
         # If unigrams only, track original forms for each stem
         if ngram_range == 1:
-            # Map each stemmed token to original tokens to find representatives
             for stemmed_token, orig in zip([term.split("_")[0] for term in terms], original_tokens):
                 if stemmed_token not in stem2original:
                     stem2original[stemmed_token] = {}
@@ -294,6 +295,8 @@ def main():
 
     Corpus linguistics involves the study and analysis of large collections of texts (corpora) to understand language use, patterns, and structures. One key aspect of corpus linguistics is identifying **characteristic words**, which are terms that appear with unusually high or low frequency in specific subsets of a corpus compared to the entire corpus. These characteristic words help in distinguishing between different text groups, revealing underlying themes, biases, or distinctive features.
 
+    According to Lebart, Salem, and Berry (1997), exploring textual data involves not only quantitative analysis of word frequencies but also qualitative interpretation to gain deeper insights into the text's content and context.
+
     **Reference**
 
     Lebart, L., Salem, A., & Berry, L. (1997). *Exploring textual data*. Springer.
@@ -320,17 +323,19 @@ def main():
             st.sidebar.write("### Stopword Removal")
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             lang_choice = None
+            stop_words = None
             if remove_sw:
                 lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
-                chosen_lang = LANGUAGES[lang_choice]
                 try:
-                    stop_words = set(stopwords.words(chosen_lang))
+                    nlp = load_spacy_model(lang_choice)
+                    stop_words = LANGUAGES[lang_choice]["stop_words"]
                 except Exception as e:
-                    st.sidebar.error(f"⚠️ Error loading stopwords for {lang_choice}: {e}")
-                    stop_words = None
+                    st.sidebar.error(f"⚠️ Error loading spaCy model for {lang_choice}: {e}")
+                    st.stop()
             else:
-                stop_words = None
-                chosen_lang = "english"  # Default for stemmer if no stopwords chosen
+                # Default to English if not removing stopwords
+                lang_choice = "English"
+                nlp = load_spacy_model(lang_choice)
 
             # Choose n-gram range
             st.sidebar.write("### N-gram Selection")
@@ -342,14 +347,6 @@ def main():
                 ngram_range = 2
             else:
                 ngram_range = 3
-
-            # Stemmer
-            stemmer_lang = chosen_lang if remove_sw else "english"
-            try:
-                stemmer = SnowballStemmer(stemmer_lang)
-            except ValueError as ve:
-                st.sidebar.error(f"⚠️ Stemming not supported for language '{stemmer_lang}': {ve}")
-                stemmer = SnowballStemmer("english")
 
             # Significance level
             alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
@@ -363,10 +360,11 @@ def main():
                         df,
                         text_col,
                         category_col,
+                        nlp,
                         remove_sw,
-                        chosen_lang,
                         ngram_range,
-                        alpha
+                        alpha,
+                        stop_words
                     )
                     
                     display_results(result_df, total_terms, categories, alpha)
