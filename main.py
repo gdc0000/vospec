@@ -107,7 +107,7 @@ def main():
                 df = pd.read_csv(uploaded_file, sep='\n', header=None)
                 df.columns = ['text']
             else:
-                st.sidebar.error("Unsupported file type.")
+                st.sidebar.error("⚠️ Unsupported file type.")
                 st.stop()
             
             st.sidebar.success("✅ File uploaded successfully!")
