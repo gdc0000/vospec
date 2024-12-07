@@ -752,7 +752,6 @@ def main():
                             # Also store settings to persist across reruns
                             st.session_state['alpha'] = alpha
                             st.session_state['remove_sw'] = remove_sw
-                            st.session_state['stop_words'] = stop_words
                             st.session_state['stemmer_obj'] = stemmer_obj
                             st.session_state['word_group_mapping'] = word_group_mapping
                             # Display results
