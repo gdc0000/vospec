@@ -17,7 +17,7 @@ LANGUAGES = {
     "Spanish": {"stopwords": get_stop_words("spanish"), "stemmer": stemmer("spanish")}
 }
 
-def preprocess_text(text, lang, remove_stopwords, stemmer_obj, ngram_range, stop_words):
+def preprocess_text(text, lang, remove_stopwords, stemmer_obj, ngram_ranges, stop_words):
     """
     Tokenizes, removes stopwords, stems, and generates n-grams from the input text.
     """
@@ -31,9 +31,11 @@ def preprocess_text(text, lang, remove_stopwords, stemmer_obj, ngram_range, stop
     # Stemming
     stemmed_tokens = [stemmer_obj.stemWord(token) for token in tokens]
     
-    # Generate n-grams
+    # Generate n-grams based on selected ranges
     final_terms = []
-    for n in range(1, ngram_range + 1):
+    for n in ngram_ranges:
+        if n > len(stemmed_tokens):
+            continue
         for i in range(len(stemmed_tokens) - n + 1):
             ngram = "_".join(stemmed_tokens[i:i+n])
             final_terms.append(ngram)
@@ -100,13 +102,17 @@ def load_data(uploaded_file):
     except Exception as e:
         raise ValueError(f"Error loading file: {e}")
 
-def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_ranges, alpha):
+def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
     """
     # Retrieve stopwords and stemmer based on selected language
-    stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else None
+    stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else []
     stemmer_obj = LANGUAGES[chosen_lang]["stemmer"]
+    
+    # Add custom stopwords if provided
+    if custom_stopwords:
+        stop_words.extend(custom_stopwords)
     
     overall_freq = {}
     category_freq = {}
@@ -133,7 +139,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             lang=chosen_lang,
             remove_stopwords=remove_sw,
             stemmer_obj=stemmer_obj,
-            ngram_range=max(ngram_ranges),
+            ngram_ranges=ngram_ranges,
             stop_words=stop_words
         )
 
@@ -164,8 +170,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         category_counts[cat] += len(selected_terms)
         total_terms += len(selected_terms)
 
-    # Exclude hapax legomena (words with global frequency = 1)
-    overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1}
+    # Exclude hapax legomena (words with global frequency = 1) and apply minimum frequency
+    overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1 and v >= min_freq}
     for cat in categories:
         category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq_filtered}
 
@@ -213,7 +219,6 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         K = all_K[i]
         n = all_n[i]
         pval = all_pvals[i]
-        significant = "Yes" if rejected[i] else "No"
 
         # Compute test-value = log2((x/n)/(K/M))
         epsilon = 1e-9  # To avoid division by zero
@@ -233,14 +238,16 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         else:
             pval_formatted = f"{pval:.3f}".lstrip('0') if pval >= 0.001 else "<.001"
 
-        final_data.append({
-            "Category": cat,
-            "Term": term_repr,
-            "Internal Frequency": x,
-            "Global Frequency": K,
-            "Test Value": round(test_val, 4),
-            "P-Value": pval_formatted
-        })
+        # Include only significant words
+        if rejected[i]:
+            final_data.append({
+                "Category": cat,
+                "Term": term_repr,
+                "Internal Frequency": x,
+                "Global Frequency": K,
+                "Test Value": round(test_val, 4),
+                "P-Value": pval_formatted
+            })
 
     result_df = pd.DataFrame(final_data)
     result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
@@ -260,9 +267,9 @@ def visualize_results(result_df, categories):
     """
     st.write("### 📊 Most Characteristic Words per Category")
     for cat in categories:
-        subset = result_df[(result_df['Category'] == cat)]
+        subset = result_df[result_df['Category'] == cat]
         if subset.empty:
-            st.write(f"No characteristic words found for category **{cat}**.")
+            st.write(f"No significant characteristic words found for category **{cat}**.")
             continue
         # Select top 10 based on absolute test value
         subset = subset.reindex(subset['Test Value'].abs().sort_values(ascending=False).index)
@@ -280,7 +287,7 @@ def visualize_results(result_df, categories):
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, total_terms, num_categories, total_types, morphological_complexity, num_hapax, alpha):
+def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha):
     """
     Displays the results table and summary statistics.
     """
@@ -299,16 +306,24 @@ def display_results(result_df, total_terms, num_categories, total_types, morphol
       This value indicates how much more (or less) the term is associated with the category compared to the corpus.
     - **P-Value:** The probability of observing the term's frequency in the category by chance. Displayed with three decimal points (e.g., .035) or as "<.001" if p < .001.
     """)
-    st.dataframe(result_df)
+
+    if result_df.empty:
+        st.warning("No significant characteristic words found based on the provided criteria.")
+    else:
+        # Group by category and display separate tables
+        for cat in sorted(result_df['Category'].unique()):
+            st.subheader(f"Category: {cat}")
+            cat_df = result_df[result_df['Category'] == cat][['Term', 'Internal Frequency', 'Global Frequency', 'Test Value', 'P-Value']]
+            st.table(cat_df.reset_index(drop=True))
 
     # Visualization
-    visualize_results(result_df, categories)
+    visualize_results(result_df, sorted(result_df['Category'].unique()))
 
     # Summary statistics
     st.write("### 📈 Summary Statistics")
     st.markdown(f"""
     - **Number of Categories:** {num_categories}
-    - **Total Number of Terms (Tokens):** {total_terms}
+    - **Total Number of Terms (Tokens):** {total_tokens}
     - **Total Number of Unique Words (Types):** {total_types}
     - **Morphological Complexity (Types/Token Ratio):** {morphological_complexity}
     - **Number of Hapax (Words that appear only once):** {num_hapax}
@@ -320,6 +335,9 @@ def download_results(result_df):
     Provides download buttons for CSV and Excel formats.
     """
     st.write("### ⬇️ Download Results")
+    if result_df.empty:
+        st.info("No results to download.")
+        return
     # CSV download
     csv_buffer = StringIO()
     result_df.to_csv(csv_buffer, index=False)
@@ -353,12 +371,12 @@ def main():
     Corpus linguistics involves analyzing large text collections to understand language use. 
     Characteristic words appear unusually often or rarely in specific text subsets compared to the whole corpus, helping uncover themes and distinctions.
     
-    Lebart, L., Salem, A., & Berry, L. (1997). Exploring textual data. Springer.
+    *Lebart, L., Salem, A., & Berry, L. (1997). Exploring textual data. Springer.*
     """)
 
     st.markdown("""
     **Overview**
-
+    
     This app allows you to identify characteristic words within different categories of your dataset. By analyzing the frequency of words (or n-grams) in specific categories compared to the entire corpus, you can uncover terms that are uniquely associated with each category. The app provides statistical significance testing to ensure that the identified words are not occurring by chance.
     """)
 
@@ -381,8 +399,32 @@ def main():
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             if remove_sw:
                 lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
+                
+                # Custom Stopword List Options
+                st.sidebar.write("### Custom Stopword List")
+                custom_stopword_option = st.sidebar.radio(
+                    "Choose how to provide custom stopwords:",
+                    options=["None", "Type custom stopwords", "Upload custom stopwords file"],
+                    index=0
+                )
+                
+                custom_stopwords = []
+                
+                if custom_stopword_option == "Type custom stopwords":
+                    separator = st.sidebar.text_input("📝 Enter a custom separator (e.g., comma, space):", value=",")
+                    custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by your chosen separator:")
+                    if custom_stopword_input:
+                        custom_stopwords = [word.strip() for word in custom_stopword_input.split(separator) if word.strip()]
+                
+                elif custom_stopword_option == "Upload custom stopwords file":
+                    uploaded_stopword_file = st.sidebar.file_uploader("📂 Upload a custom stopwords file (.txt):", type=["txt"])
+                    separator = st.sidebar.text_input("📝 Enter the separator used in your file (e.g., comma, space):", value=",")
+                    if uploaded_stopword_file and separator:
+                        stopword_content = uploaded_stopword_file.read().decode('utf-8')
+                        custom_stopwords = [word.strip() for word in stopword_content.split(separator) if word.strip()]
             else:
                 lang_choice = "English"  # Default language if stopword removal is not selected
+                custom_stopwords = []
 
             # N-gram Selection with Multiple Choices
             st.sidebar.write("### N-gram Selection")
@@ -392,12 +434,23 @@ def main():
                 default=["Unigrams"]
             )
             ngram_mapping = {"Unigrams": 1, "Bigrams": 2, "Trigrams": 3}
-            ngram_ranges = [ngram_mapping[ngram] for ngram in ngram_options]
+            ngram_ranges = sorted([ngram_mapping[ngram] for ngram in ngram_options])
 
             if not ngram_ranges:
                 st.sidebar.error("⚠️ Please select at least one N-gram option.")
 
+            # Minimum Frequency Selection
+            st.sidebar.write("### Minimum Frequency")
+            min_freq = st.sidebar.number_input(
+                "🔢 Set the minimum frequency for words to be considered in the analysis:",
+                min_value=1,
+                max_value=1000,
+                value=1,
+                step=1
+            )
+
             # Significance Level
+            st.sidebar.write("### Significance Level")
             alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
 
             # Run Analysis Button
@@ -415,7 +468,9 @@ def main():
                             remove_sw,
                             lang_choice,
                             ngram_ranges,
-                            alpha
+                            min_freq,
+                            alpha,
+                            custom_stopwords
                         )
                         display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha)
                         download_results(result_df)
