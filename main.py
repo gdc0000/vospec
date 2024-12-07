@@ -404,13 +404,16 @@ def visualize_results(result_df, categories):
             color_discrete_map={"Overrepresented": "blue", "Underrepresented": "red"}
         )
         
-        # Update layout for better readability
+        # Update layout for better readability, merging yaxis properties
         fig.update_layout(
-            yaxis={'categoryorder': 'total ascending'},
+            yaxis=dict(
+                categoryorder='total ascending',
+                showgrid=False  # Remove grid lines for y-axis
+            ),
             legend_title_text='Word Representation',
             plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
             xaxis=dict(showgrid=True, gridcolor='lightgray'),
-            yaxis=dict(showgrid=False),
+            # Remove the duplicate yaxis keyword
         )
         
         # Add horizontal line at x=0 for reference
@@ -426,7 +429,6 @@ def visualize_results(result_df, categories):
         )
         
         st.plotly_chart(fig, use_container_width=True)
-
 
 def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
     """
