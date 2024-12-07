@@ -100,7 +100,7 @@ def load_data(uploaded_file):
     except Exception as e:
         raise ValueError(f"Error loading file: {e}")
 
-def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_range, alpha):
+def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_ranges, alpha):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
     """
@@ -116,42 +116,60 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
     stem2original = {}
     categories = df[category_col].dropna().unique()
 
+    # Initialize frequency dictionaries
     for cat in categories:
         category_freq[cat] = {}
         category_counts[cat] = 0
+
+    # Initialize word frequency for Types, Tokens, and Hapax
+    word_freq = {}
 
     # Preprocessing and frequency counting
     for _, row in df.iterrows():
         cat = row[category_col]
         text = str(row[text_col])
-        terms, original_tokens = preprocess_text(
+        terms, tokens = preprocess_text(
             text,
             lang=chosen_lang,
             remove_stopwords=remove_sw,
             stemmer_obj=stemmer_obj,
-            ngram_range=ngram_range,
+            ngram_range=max(ngram_ranges),
             stop_words=stop_words
         )
 
-        if ngram_range == 1:
-            # Map stems to original forms for representative tokens
-            for stemmed_token, orig in zip([term.split("_")[0] for term in terms], original_tokens):
+        # Update word frequency
+        for token in tokens:
+            word_freq[token] = word_freq.get(token, 0) + 1
+
+        # Generate selected n-grams
+        selected_terms = []
+        for n in ngram_ranges:
+            if n > len(tokens):
+                continue
+            for i in range(len(tokens) - n + 1):
+                ngram = "_".join([stemmer_obj.stemWord(token) for token in tokens[i:i+n]])
+                selected_terms.append(ngram)
+
+        # If unigrams are included, map stems to original forms
+        if 1 in ngram_ranges:
+            for stemmed_token, orig in zip([term.split("_")[0] for term in selected_terms if '_' not in term], tokens):
                 if stemmed_token not in stem2original:
                     stem2original[stemmed_token] = {}
                 stem2original[stemmed_token][orig] = stem2original[stemmed_token].get(orig, 0) + 1
 
-        for t in terms:
+        # Update frequency counts
+        for t in selected_terms:
             overall_freq[t] = overall_freq.get(t, 0) + 1
             category_freq[cat][t] = category_freq[cat].get(t, 0) + 1
-        category_counts[cat] += len(terms)
-        total_terms += len(terms)
+        category_counts[cat] += len(selected_terms)
+        total_terms += len(selected_terms)
 
     # Exclude hapax legomena (words with global frequency = 1)
-    overall_freq = {k: v for k, v in overall_freq.items() if v > 1}
+    overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1}
     for cat in categories:
-        category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq}
+        category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq_filtered}
 
-    if ngram_range == 1:
+    if 1 in ngram_ranges:
         stem2repr = find_most_frequent_original_forms(stem2original)
     else:
         stem2repr = {}
@@ -169,7 +187,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         cat_vocab = category_freq[cat]
         for t in cat_vocab:
             x = cat_vocab[t]
-            K = overall_freq[t]
+            K = overall_freq_filtered[t]
 
             # Hypergeometric test
             pval_over = hypergeom.sf(x-1, total_terms, K, n)
@@ -203,26 +221,38 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         global_ratio = K / (total_terms + epsilon)
         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
 
-        if ngram_range == 1:
+        if 1 in ngram_ranges:
             stem = t.split("_")[0]
             term_repr = stem2repr.get(stem, t)
         else:
             term_repr = t
+
+        # Format P-Value
+        if pval < 0.001:
+            pval_formatted = "<.001"
+        else:
+            pval_formatted = f"{pval:.3f}".lstrip('0') if pval >= 0.001 else "<.001"
 
         final_data.append({
             "Category": cat,
             "Term": term_repr,
             "Internal Frequency": x,
             "Global Frequency": K,
-            "Test-Value": round(test_val, 4),
-            "P-Value": round(pval, 6),
-            "Significant": significant
+            "Test Value": round(test_val, 4),
+            "P-Value": pval_formatted
         })
 
     result_df = pd.DataFrame(final_data)
     result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
 
-    return result_df, categories, total_terms
+    # Compute summary statistics
+    num_categories = len(categories)
+    total_tokens = sum(word_freq.values())
+    total_types = len(word_freq)
+    morphological_complexity = round(total_types / total_tokens, 2) if total_tokens > 0 else 0.00
+    num_hapax = sum(1 for freq in word_freq.values() if freq == 1)
+
+    return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax
 
 def visualize_results(result_df, categories):
     """
@@ -230,31 +260,45 @@ def visualize_results(result_df, categories):
     """
     st.write("### 📊 Most Characteristic Words per Category")
     for cat in categories:
-        subset = result_df[(result_df['Category'] == cat) & (result_df['Significant'] == "Yes")]
+        subset = result_df[(result_df['Category'] == cat)]
         if subset.empty:
-            st.write(f"No significant characteristic words found for category **{cat}**.")
+            st.write(f"No characteristic words found for category **{cat}**.")
             continue
         # Select top 10 based on absolute test value
-        subset = subset.reindex(subset['Test-Value'].abs().sort_values(ascending=False).index)
+        subset = subset.reindex(subset['Test Value'].abs().sort_values(ascending=False).index)
         top_subset = subset.head(10)
 
         fig = px.bar(
             top_subset,
-            x="Test-Value",
+            x="Test Value",
             y="Term",
             orientation='h',
             title=f"Top Characteristic Words for Category: {cat}",
-            labels={"Test-Value": "Test Value", "Term": "Word"},
+            labels={"Test Value": "Test Value (log2((x/n)/(K/M)))", "Term": "Word"},
             height=400
         )
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, total_terms, categories, alpha):
+def display_results(result_df, total_terms, num_categories, total_types, morphological_complexity, num_hapax, alpha):
     """
     Displays the results table and summary statistics.
     """
     st.write("### 📄 Characteristic Words Table")
+    st.markdown("""
+    **Table Explanation:**
+    - **Category:** The specific group or category within your dataset.
+    - **Term:** The characteristic word or n-gram.
+    - **Internal Frequency:** Number of times the term appears within the category.
+    - **Global Frequency:** Number of times the term appears across the entire corpus.
+    - **Test Value:** Calculated as log2((x/n)/(K/M)) where:
+        - *x* = Internal Frequency
+        - *n* = Total terms in the category
+        - *K* = Global Frequency
+        - *M* = Total terms in the corpus
+      This value indicates how much more (or less) the term is associated with the category compared to the corpus.
+    - **P-Value:** The probability of observing the term's frequency in the category by chance. Displayed with three decimal points (e.g., .035) or as "<.001" if p < .001.
+    """)
     st.dataframe(result_df)
 
     # Visualization
@@ -262,9 +306,14 @@ def display_results(result_df, total_terms, categories, alpha):
 
     # Summary statistics
     st.write("### 📈 Summary Statistics")
-    st.write(f"**Total Terms in Corpus (excluding hapax):** {total_terms}")
-    st.write(f"**Number of Categories:** {len(categories)}")
-    st.write(f"**Significance Level (alpha):** {alpha}")
+    st.markdown(f"""
+    - **Number of Categories:** {num_categories}
+    - **Total Number of Terms (Tokens):** {total_terms}
+    - **Total Number of Unique Words (Types):** {total_types}
+    - **Morphological Complexity (Types/Token Ratio):** {morphological_complexity}
+    - **Number of Hapax (Words that appear only once):** {num_hapax}
+    - **Significance Level (alpha):** {alpha}
+    """)
 
 def download_results(result_df):
     """
@@ -300,11 +349,17 @@ def main():
 
     st.markdown("""
     **Introduction**
-
+    
     Corpus linguistics involves analyzing large text collections to understand language use. 
-    **Characteristic words** appear unusually often or rarely in specific text subsets compared to the whole corpus, helping uncover themes and distinctions.
+    Characteristic words appear unusually often or rarely in specific text subsets compared to the whole corpus, helping uncover themes and distinctions.
+    
+    Lebart, L., Salem, A., & Berry, L. (1997). Exploring textual data. Springer.
+    """)
 
-    (Lebart, L., Salem, A., & Berry, L. (1997). *Exploring textual data*. Springer.)
+    st.markdown("""
+    **Overview**
+
+    This app allows you to identify characteristic words within different categories of your dataset. By analyzing the frequency of words (or n-grams) in specific categories compared to the entire corpus, you can uncover terms that are uniquely associated with each category. The app provides statistical significance testing to ensure that the identified words are not occurring by chance.
     """)
 
     st.sidebar.header("🔧 Configuration")
@@ -329,36 +384,41 @@ def main():
             else:
                 lang_choice = "English"  # Default language if stopword removal is not selected
 
-            # N-gram Selection
+            # N-gram Selection with Multiple Choices
             st.sidebar.write("### N-gram Selection")
-            ngram_option = st.sidebar.radio("Select N-grams to consider", 
-                                            ["Unigrams only", "Unigrams + Bigrams", "Unigrams + Bigrams + Trigrams"])
-            if ngram_option == "Unigrams only":
-                ngram_range = 1
-            elif ngram_option == "Unigrams + Bigrams":
-                ngram_range = 2
-            else:
-                ngram_range = 3
+            ngram_options = st.sidebar.multiselect(
+                "Select N-grams to consider",
+                options=["Unigrams", "Bigrams", "Trigrams"],
+                default=["Unigrams"]
+            )
+            ngram_mapping = {"Unigrams": 1, "Bigrams": 2, "Trigrams": 3}
+            ngram_ranges = [ngram_mapping[ngram] for ngram in ngram_options]
+
+            if not ngram_ranges:
+                st.sidebar.error("⚠️ Please select at least one N-gram option.")
 
             # Significance Level
             alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
 
             # Run Analysis Button
             if st.sidebar.button("🚀 Run Analysis"):
-                st.header("🔍 Analysis Results")
-                st.write("### Processing...")
-                with st.spinner("🕒 Analyzing the corpus..."):
-                    result_df, categories, total_terms = perform_analysis(
-                        df,
-                        text_col,
-                        category_col,
-                        remove_sw,
-                        lang_choice,
-                        ngram_range,
-                        alpha
-                    )
-                    display_results(result_df, total_terms, categories, alpha)
-                    download_results(result_df)
+                if not ngram_ranges:
+                    st.error("⚠️ Please select at least one N-gram option to proceed.")
+                else:
+                    st.header("🔍 Analysis Results")
+                    st.write("### Processing...")
+                    with st.spinner("🕒 Analyzing the corpus..."):
+                        result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax = perform_analysis(
+                            df,
+                            text_col,
+                            category_col,
+                            remove_sw,
+                            lang_choice,
+                            ngram_ranges,
+                            alpha
+                        )
+                        display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha)
+                        download_results(result_df)
 
         except ValueError as ve:
             st.sidebar.error(f"⚠️ {ve}")
