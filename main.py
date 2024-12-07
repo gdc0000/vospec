@@ -499,8 +499,7 @@ def main():
     st.markdown("""
     **Overview**
     
-    This app identifies characteristic words within categories of your dataset. By analyzing frequency of words (or n-grams)
-    in categories compared to the entire corpus, it uncovers terms uniquely associated with each category.
+    This app identifies characteristic words within categories of your dataset. By analyzing the frequency of words (or n-grams) in specific categories compared to the entire corpus, it uncovers terms uniquely associated with each category.
     Statistical significance testing ensures identified words are not occurring by chance.
     """)
 
@@ -538,27 +537,16 @@ def main():
 
             st.sidebar.write("### Word Grouping")
             if st.sidebar.button("➕ Add Word Group"):
-                st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': [], 'separator': ','})
+                st.session_state['word_groups'].append({'name': '', 'words': []})
 
             for idx, group in enumerate(st.session_state['word_groups']):
                 with st.sidebar.expander(f"Group {idx+1}", expanded=True):
                     group['name'] = st.text_input(f"Group {idx+1} Name", value=group['name'], key=f"group_name_{idx}")
-                    group['method'] = st.radio(f"Group {idx+1} Words Input Method", ["Type custom words", "Upload custom words file"], key=f"group_method_{idx}")
-                    if group['method'] == "Type custom words":
-                        group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
-                        group_words_input = st.text_input(f"Group {idx+1} Words", value=", ".join(group['words']), key=f"group_words_{idx}")
-                        if group_words_input:
-                            group['words'] = [word.strip().lower() for word in group_words_input.split(group['separator']) if word.strip()]
-                        else:
-                            group['words'] = []
+                    group_words_input = st.text_input(f"Group {idx+1} Words (separated by commas)", value=", ".join(group['words']), key=f"group_words_{idx}")
+                    if group_words_input:
+                        group['words'] = [word.strip().lower() for word in group_words_input.split(',') if word.strip()]
                     else:
-                        group_file = st.file_uploader(f"Group {idx+1} Words File (.txt)", type=["txt"], key=f"group_file_{idx}")
-                        group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
-                        if group_file and group['separator']:
-                            words_content = group_file.read().decode('utf-8')
-                            group['words'] = [word.strip().lower() for word in words_content.split(group['separator']) if word.strip()]
-                        elif not group['words']:
-                            group['words'] = []
+                        group['words'] = []
                     remove_group = st.checkbox(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}")
                     if remove_group:
                         st.session_state['word_groups'].pop(idx)
@@ -573,32 +561,25 @@ def main():
                 elif group_name and '_' in group_name:
                     st.sidebar.error(f"Group name '{group['name']}' should not contain underscores '_'. Please rename it.")
 
-            st.sidebar.write("### Word Exclusion")
-            custom_stopword_option = st.sidebar.radio(
-                "Choose how to provide custom stopwords:",
-                options=["None", "Type custom stopwords", "Upload custom stopwords file"],
-                index=0
-            )
-            
-            custom_stopwords = []
-            if custom_stopword_option == "Type custom stopwords":
-                separator_sw = st.sidebar.text_input("📝 Enter a custom separator:", value=",")
-                custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords:")
-                if custom_stopword_input:
-                    custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(separator_sw) if word.strip()]
-            elif custom_stopword_option == "Upload custom stopwords file":
-                uploaded_stopword_file = st.sidebar.file_uploader("📂 Upload a custom stopwords file (.txt):", type=["txt"])
-                separator_sw = st.sidebar.text_input("📝 Enter separator:", value=",")
-                if uploaded_stopword_file and separator_sw:
-                    stopword_content = uploaded_stopword_file.read().decode('utf-8')
-                    custom_stopwords = [word.strip().lower() for word in stopword_content.split(separator_sw) if word.strip()]
-
             st.sidebar.write("### Stopword Removal")
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             if remove_sw:
                 lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
             else:
                 lang_choice = "English"
+
+            st.sidebar.write("### Custom Stopwords")
+            custom_stopword_option = st.sidebar.radio(
+                "Choose how to provide custom stopwords:",
+                options=["None", "Type custom stopwords"],
+                index=0
+            )
+            
+            custom_stopwords = []
+            if custom_stopword_option == "Type custom stopwords":
+                custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by commas:")
+                if custom_stopword_input:
+                    custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(',') if word.strip()]
 
             st.sidebar.write("### Stemming")
             stem_words = st.sidebar.checkbox("🪓 Apply stemming?", value=True)
@@ -675,8 +656,6 @@ def main():
                             st.session_state['morphological_complexity'] = morphological_complexity
                             st.session_state['num_hapax'] = num_hapax
                             st.session_state['category_stats'] = category_stats
-                            st.session_state['alpha'] = alpha
-                            st.session_state['remove_sw'] = remove_sw
                             # Display results
                             display_results(
                                 result_df,
