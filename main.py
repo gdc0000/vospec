@@ -357,9 +357,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             "Number of Hapax": cat_num_hapax
         }
 
-    # Update progress: Done
-    progress.progress(100)
-    return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping
+    return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats
 
 def visualize_and_display(category, cat_df, category_stats, alpha):
     """
@@ -436,7 +434,7 @@ def visualize_and_display(category, cat_df, category_stats, alpha):
 
     st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, categories, num_categories, total_tokens, num_categories_val, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
+def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
     """
     Displays the summary statistics and the results table along with corresponding bar charts.
     """
@@ -477,14 +475,16 @@ def display_results(result_df, categories, num_categories, total_tokens, num_cat
             cat_df = result_df[result_df['Category'] == cat]
             visualize_and_display(cat, cat_df, category_stats, alpha)
 
-def download_results(result_df):
+def download_results():
     """
     Provides download options for CSV, Excel, or both formats.
+    Retrieves the result_df from session_state.
     """
     st.write("### ⬇️ Download Results")
-    if result_df.empty:
+    if 'result_df' not in st.session_state or st.session_state['result_df'].empty:
         st.info("No results to download.")
         return
+    result_df = st.session_state['result_df']
     # Selection of download formats
     download_options = st.multiselect(
         "Select download format(s):",
@@ -711,7 +711,7 @@ def main():
                             word_group_mapping,
                             progress
                         )
-                        if len(result) == 12:
+                        if len(result) == 8:
                             (
                                 result_df,
                                 categories,
@@ -720,29 +720,33 @@ def main():
                                 total_types,
                                 morphological_complexity,
                                 num_hapax,
-                                category_stats,
-                                remove_sw_returned,
-                                stop_words_returned,
-                                stemmer_obj_returned,
-                                word_group_mapping_returned
+                                category_stats
                             ) = result
+                            # Store results in session_state
+                            st.session_state['result_df'] = result_df
+                            st.session_state['categories'] = categories
+                            st.session_state['num_categories'] = num_categories
+                            st.session_state['total_tokens'] = total_tokens
+                            st.session_state['total_types'] = total_types
+                            st.session_state['morphological_complexity'] = morphological_complexity
+                            st.session_state['num_hapax'] = num_hapax
+                            st.session_state['category_stats'] = category_stats
+                            # Display results
                             display_results(
                                 result_df,
                                 categories,
                                 num_categories,
                                 total_tokens,
-                                num_categories,  # Corrected variable name
                                 total_types,
                                 morphological_complexity,
                                 num_hapax,
                                 alpha,
                                 category_stats,
-                                remove_sw_returned,
-                                stop_words_returned,
-                                stemmer_obj_returned,
-                                word_group_mapping_returned
+                                remove_sw,
+                                stop_words,
+                                stemmer_obj,
+                                word_group_mapping
                             )
-                            download_results(result_df)
                         else:
                             st.error("Error during analysis.")
 
@@ -752,6 +756,10 @@ def main():
             st.sidebar.error(f"⚠️ Error processing the uploaded file: {e}")
     else:
         st.sidebar.info("📥 Awaiting file upload.")
+
+    # Display download button only if analysis has been done
+    if 'result_df' in st.session_state and not st.session_state['result_df'].empty:
+        download_results()
 
 if __name__ == "__main__":
     main()
