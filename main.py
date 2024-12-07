@@ -5,7 +5,6 @@ import re
 from stop_words import get_stop_words
 from snowballstemmer import stemmer
 from scipy.stats import hypergeom
-from statsmodels.stats.multitest import multipletests
 from io import StringIO, BytesIO
 import math
 import plotly.express as px
@@ -51,6 +50,23 @@ def find_most_frequent_original_forms(stem2original):
         repr_word = max(counts.items(), key=lambda x: x[1])[0]
         stem2repr[stem] = repr_word
     return stem2repr
+
+def benjamini_hochberg_correction(pvals, alpha=0.05):
+    """
+    Performs the Benjamini-Hochberg FDR correction on a list of p-values.
+    Returns a list indicating which hypotheses are rejected.
+    """
+    n = len(pvals)
+    sorted_indices = np.argsort(pvals)
+    sorted_pvals = np.array(pvals)[sorted_indices]
+    thresholds = (np.arange(1, n+1) / n) * alpha
+    below_threshold = sorted_pvals <= thresholds
+    if not np.any(below_threshold):
+        return np.zeros(n, dtype=bool)
+    max_idx = np.max(np.where(below_threshold))
+    rejected = np.zeros(n, dtype=bool)
+    rejected[sorted_indices[:max_idx+1]] = True
+    return rejected
 
 def add_footer():
     """
@@ -167,9 +183,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             all_K.append(K)
             all_n.append(n)
 
-    # Multiple testing correction (False Discovery Rate)
-    pvals_array = np.array(all_pvals)
-    reject, pvals_corrected, _, _ = multipletests(pvals_array, alpha=alpha, method='fdr_bh')
+    # Multiple testing correction using Benjamini-Hochberg
+    rejected = benjamini_hochberg_correction(all_pvals, alpha=alpha)
 
     # Compile results
     final_data = []
@@ -179,7 +194,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         x = all_x[i]
         K = all_K[i]
         n = all_n[i]
-        pval = pvals_corrected[i]
+        pval = all_pvals[i]
+        significant = "Yes" if rejected[i] else "No"
 
         # Compute test-value = log2((x/n)/(K/M))
         epsilon = 1e-9  # To avoid division by zero
@@ -200,7 +216,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             "Global Frequency": K,
             "Test-Value": round(test_val, 4),
             "P-Value": round(pval, 6),
-            "Significant": "Yes" if reject[i] else "No"
+            "Significant": significant
         })
 
     result_df = pd.DataFrame(final_data)
