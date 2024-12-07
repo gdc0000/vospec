@@ -359,7 +359,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
 
     return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats
 
-def visualize_and_display(category, cat_df, category_stats, alpha):
+def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
     """
     Displays the characteristic words table and its corresponding bar chart for a given category.
     """
@@ -383,8 +383,8 @@ def visualize_and_display(category, cat_df, category_stats, alpha):
         return
 
     # Separate positive and negative test values
-    positive_subset = display_table[display_table['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(10)
-    negative_subset = display_table[display_table['Test Value'] < 0].sort_values(by='Test Value').head(10)
+    positive_subset = display_table[display_table['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(top_n)
+    negative_subset = display_table[display_table['Test Value'] < 0].sort_values(by='Test Value').head(top_n)
 
     # Combine the positive and negative subsets
     combined_subset = pd.concat([positive_subset, negative_subset])
@@ -473,7 +473,7 @@ def display_results(result_df, categories, num_categories, total_tokens, total_t
         # Iterate through each category and display table + bar chart
         for cat in sorted(categories):
             cat_df = result_df[result_df['Category'] == cat]
-            visualize_and_display(cat, cat_df, category_stats, alpha)
+            visualize_and_display(cat, cat_df, category_stats, alpha, top_n=10)
 
 def download_results():
     """
@@ -554,6 +554,24 @@ def main():
 
     st.sidebar.header("🔧 Configuration")
     uploaded_file = st.sidebar.file_uploader("📂 Upload Your Data", type=["csv", "xlsx", "tsv", "txt"])
+
+    # Initialize session_state variables if not already present
+    if 'result_df' not in st.session_state:
+        st.session_state['result_df'] = pd.DataFrame()
+    if 'categories' not in st.session_state:
+        st.session_state['categories'] = []
+    if 'num_categories' not in st.session_state:
+        st.session_state['num_categories'] = 0
+    if 'total_tokens' not in st.session_state:
+        st.session_state['total_tokens'] = 0
+    if 'total_types' not in st.session_state:
+        st.session_state['total_types'] = 0
+    if 'morphological_complexity' not in st.session_state:
+        st.session_state['morphological_complexity'] = 0.00
+    if 'num_hapax' not in st.session_state:
+        st.session_state['num_hapax'] = 0
+    if 'category_stats' not in st.session_state:
+        st.session_state['category_stats'] = {}
 
     if uploaded_file is not None:
         try:
@@ -722,7 +740,7 @@ def main():
                                 num_hapax,
                                 category_stats
                             ) = result
-                            # Store results in session_state
+                            # Store results and settings in session_state
                             st.session_state['result_df'] = result_df
                             st.session_state['categories'] = categories
                             st.session_state['num_categories'] = num_categories
@@ -731,6 +749,12 @@ def main():
                             st.session_state['morphological_complexity'] = morphological_complexity
                             st.session_state['num_hapax'] = num_hapax
                             st.session_state['category_stats'] = category_stats
+                            # Also store settings to persist across reruns
+                            st.session_state['alpha'] = alpha
+                            st.session_state['remove_sw'] = remove_sw
+                            st.session_state['stop_words'] = stop_words
+                            st.session_state['stemmer_obj'] = stemmer_obj
+                            st.session_state['word_group_mapping'] = word_group_mapping
                             # Display results
                             display_results(
                                 result_df,
