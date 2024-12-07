@@ -443,7 +443,7 @@ def main():
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
 
-            # Verify if the DataFrame has any columns
+            # Check if the DataFrame has any columns
             if df.empty:
                 st.sidebar.error("⚠️ The uploaded file is empty.")
             else:
