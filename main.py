@@ -434,7 +434,7 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
 
     st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
+def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stemmer_obj, word_group_mapping):
     """
     Displays the summary statistics and the results table along with corresponding bar charts.
     """
@@ -767,7 +767,6 @@ def main():
                                 alpha,
                                 category_stats,
                                 remove_sw,
-                                stop_words,
                                 stemmer_obj,
                                 word_group_mapping
                             )
