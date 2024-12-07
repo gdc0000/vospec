@@ -8,7 +8,6 @@ from scipy.stats import hypergeom
 from io import BytesIO
 import math
 import plotly.express as px
-import zipfile
 
 # Define supported languages and their corresponding stopword lists and stemmers
 LANGUAGES = {
@@ -413,7 +412,8 @@ def main():
         ('morphological_complexity', 0.00),
         ('num_hapax', 0),
         ('category_stats', {}),
-        ('replacements', [])
+        ('replacements', []),
+        ('alpha', 0.05)
     ]:
         if var not in st.session_state:
             st.session_state[var] = default
@@ -443,8 +443,7 @@ def main():
                     remove_repl = st.checkbox(f"🗑️ Remove Replacement {idx+1}", key=f"remove_repl_{idx}")
                     if remove_repl:
                         st.session_state['replacements'].pop(idx)
-                        st.experimental_set_query_params(refresh='true')
-                        st.stop()
+                        st.experimental_rerun()
 
             # Convert replacements list to dictionary
             replacements = {repl['old']: repl['new'] for repl in st.session_state.get('replacements', []) if repl['old'] and repl['new']}
