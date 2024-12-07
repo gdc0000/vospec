@@ -2,24 +2,34 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-from stop_words import get_stop_words
-from snowballstemmer import stemmer
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk import download
 from scipy.stats import hypergeom
 from io import BytesIO
 import math
 import plotly.express as px
 
-# Define supported languages and their corresponding stopword lists and stemmers
+# Download necessary NLTK data
+@st.cache_resource
+def initialize_nltk():
+    download('stopwords')
+    download('wordnet')
+    return WordNetLemmatizer()
+
+lemmatizer = initialize_nltk()
+
+# Define supported languages and their corresponding stopword lists
 LANGUAGES = {
-    "English": {"stopwords": get_stop_words("english"), "stemmer": stemmer("english")},
-    "French": {"stopwords": get_stop_words("french"), "stemmer": stemmer("french")},
-    "Italian": {"stopwords": get_stop_words("italian"), "stemmer": stemmer("italian")},
-    "Spanish": {"stopwords": get_stop_words("spanish"), "stemmer": stemmer("spanish")}
+    "English": {"stopwords": stopwords.words("english")},
+    "French": {"stopwords": stopwords.words("french")},
+    "Italian": {"stopwords": stopwords.words("italian")},
+    "Spanish": {"stopwords": stopwords.words("spanish")}
 }
 
-def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram_ranges, stop_words):
+def preprocess_text(text, lang, remove_stopwords, lemmatize, lemmatizer_obj, ngram_ranges, stop_words):
     """
-    Tokenizes, removes stopwords (if requested), stems (if enabled),
+    Tokenizes, removes stopwords (if requested), lemmatizes (if enabled),
     and generates n-grams from the input text.
     """
     tokens = re.findall(r'\b\w+\b', text.lower())
@@ -28,9 +38,9 @@ def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram
     if remove_stopwords and stop_words:
         tokens = [token for token in tokens if token not in stop_words]
 
-    # Stemming if requested
-    if stem_words and stemmer_obj is not None:
-        tokens = [stemmer_obj.stemWord(token) for token in tokens]
+    # Lemmatize if requested
+    if lemmatize and lemmatizer_obj is not None:
+        tokens = [lemmatizer_obj.lemmatize(token) for token in tokens]
 
     # Generate n-grams based on selected ranges
     final_terms = []
@@ -103,7 +113,7 @@ def load_data(uploaded_file):
     except Exception as e:
         raise ValueError(f"Error loading file: {e}")
 
-def perform_analysis(df, text_col, category_col, selected_categories, remove_sw, stem_words, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords, replacements, progress):
+def perform_analysis(df, text_col, category_col, selected_categories, remove_sw, lemmatize, lemmatizer_obj, ngram_ranges, min_freq, alpha, custom_stopwords, replacements, progress, chosen_lang):
     """
     Performs the characteristic words analysis and returns the result DataFrame and frequency inventory.
     Updates the progress bar to indicate analysis steps.
@@ -112,11 +122,10 @@ def perform_analysis(df, text_col, category_col, selected_categories, remove_sw,
     progress.progress(5)
     df[text_col] = df[text_col].astype(str).apply(lambda x: apply_replacements(x, replacements))
     
-    # Retrieve stopwords and stemmer based on selected language
+    # Retrieve stopwords based on selected language
     progress.progress(10)
     stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else []
-    stemmer_obj = LANGUAGES[chosen_lang]["stemmer"] if stem_words else None
-
+    
     if custom_stopwords:
         stop_words.extend(custom_stopwords)
 
@@ -133,7 +142,7 @@ def perform_analysis(df, text_col, category_col, selected_categories, remove_sw,
     word_freq = {}
     
     progress.progress(20)
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         cat = row[category_col]
         if cat not in categories:
             continue
@@ -142,8 +151,8 @@ def perform_analysis(df, text_col, category_col, selected_categories, remove_sw,
             text,
             lang=chosen_lang,
             remove_stopwords=remove_sw,
-            stem_words=stem_words,
-            stemmer_obj=stemmer_obj,
+            lemmatize=lemmatize,
+            lemmatizer_obj=lemmatizer_obj,
             ngram_ranges=ngram_ranges,
             stop_words=stop_words
         )
@@ -165,8 +174,8 @@ def perform_analysis(df, text_col, category_col, selected_categories, remove_sw,
         ' '.join(df[text_col].astype(str)),
         lang=chosen_lang,
         remove_stopwords=remove_sw,
-        stem_words=stem_words,
-        stemmer_obj=stemmer_obj,
+        lemmatize=lemmatize,
+        lemmatizer_obj=lemmatizer_obj,
         ngram_ranges=[1],
         stop_words=stop_words
     )
@@ -468,8 +477,8 @@ def main():
                 if custom_stopword_input:
                     custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(',') if word.strip()]
 
-            st.sidebar.write("### Stemming")
-            stem_words = st.sidebar.checkbox("🪓 Apply stemming?", value=True)
+            st.sidebar.write("### Lemmatization")
+            lemmatize = st.sidebar.checkbox("📝 Apply lemmatization?", value=True)
 
             st.sidebar.write("### N-gram Selection")
             ngram_options = st.sidebar.multiselect(
@@ -522,14 +531,15 @@ def main():
                             category_col,
                             selected_categories,
                             remove_sw,
-                            stem_words,
-                            lang_choice,
+                            lemmatize,
+                            lemmatizer,
                             ngram_ranges,
                             min_freq,
                             alpha,
                             custom_stopwords,
                             replacements,
-                            progress
+                            progress,
+                            lang_choice
                         )
                         # Store results in session_state
                         st.session_state['result_df'] = characteristic_words_df
@@ -553,8 +563,8 @@ def main():
                                     ' '.join(tokens),
                                     lang=lang_choice,
                                     remove_stopwords=remove_sw,
-                                    stem_words=stem_words,
-                                    stemmer_obj=LANGUAGES[lang_choice]["stemmer"] if stem_words else None,
+                                    lemmatize=lemmatize,
+                                    lemmatizer_obj=lemmatizer_obj,
                                     ngram_ranges=[1],
                                     stop_words=stop_words
                                 )
@@ -562,7 +572,12 @@ def main():
                                 cat_types_set.update(tokens_processed)
                             cat_types = len(cat_types_set)
                             cat_morph_complexity = round(cat_types / cat_tokens, 2) if cat_tokens > 0 else 0.00
-                            cat_num_hapax = sum(1 for token in cat_types_set if frequency_inventory.loc[frequency_inventory['Word'] == token, 'Frequency'].values[0] == 1)
+                            # Handle cases where the term might not be found in frequency_inventory
+                            cat_num_hapax = 0
+                            for token in cat_types_set:
+                                freq_row = frequency_inventory.loc[frequency_inventory['Word'] == token, 'Frequency']
+                                if not freq_row.empty and freq_row.values[0] == 1:
+                                    cat_num_hapax += 1
                             category_stats[cat] = {
                                 "Number of Instances": num_instances,
                                 "Number of Tokens": cat_tokens,
