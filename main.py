@@ -629,6 +629,3 @@ def main():
         main()
         add_footer()
         pass
-    except Exception as e:
-    # Handle the exception
-    print(f"An error occurred: {e}")
