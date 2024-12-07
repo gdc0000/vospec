@@ -523,6 +523,11 @@ def main():
         try:
             df = load_data(uploaded_file)
             st.sidebar.success("✅ File uploaded successfully!")
+            
+            # Display available columns for user reference
+            st.sidebar.write("### Available Columns:")
+            st.sidebar.write(df.columns.tolist())
+
             # Show data preview
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
@@ -644,6 +649,11 @@ def main():
                 elif not text_col or not category_col:
                     st.error("⚠️ Please select both text and category columns.")
                 else:
+                    # Validate that the selected category column exists
+                    if category_col not in df.columns:
+                        st.error(f"⚠️ The selected category column '{category_col}' does not exist in the uploaded dataset.")
+                        return
+                    # Proceed with analysis
                     st.header("🔍 Analysis Results")
                     st.write("### Processing...")
 
