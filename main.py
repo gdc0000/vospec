@@ -20,31 +20,29 @@ LANGUAGES = {
 
 def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram_ranges, stop_words, group_names=None):
     """
-    Tokenizes, removes stopwords, stems (if enabled and not in group_names), and generates n-grams from the input text.
+    Tokenizes, removes stopwords (if requested), stems (if enabled and token not in group_names),
+    and generates n-grams from the input text.
     """
-    # Tokenization using regex to extract words
     tokens = re.findall(r'\b\w+\b', text.lower())
 
     # Remove stopwords if requested
     if remove_stopwords and stop_words:
         tokens = [token for token in tokens if token not in stop_words]
 
-    # Stemming if requested and token not in group_names
+    # Stemming if requested
     if stem_words and stemmer_obj is not None:
-        stemmed_tokens = [stemmer_obj.stemWord(token) if not group_names or token not in group_names else token for token in tokens]
-    else:
-        stemmed_tokens = tokens.copy()
+        tokens = [stemmer_obj.stemWord(token) if not group_names or token not in group_names else token for token in tokens]
 
     # Generate n-grams based on selected ranges
     final_terms = []
     for n in ngram_ranges:
-        if n > len(stemmed_tokens):
+        if n > len(tokens):
             continue
-        for i in range(len(stemmed_tokens) - n + 1):
+        for i in range(len(tokens) - n + 1):
             if n == 1:
-                term = stemmed_tokens[i]
+                term = tokens[i]
             else:
-                term = "_".join(stemmed_tokens[i:i+n])
+                term = "_".join(tokens[i:i+n])
             final_terms.append(term)
 
     return final_terms, tokens
@@ -55,7 +53,6 @@ def find_most_frequent_original_forms(stem2original):
     """
     stem2repr = {}
     for stem, counts in stem2original.items():
-        # Pick the original form with highest frequency
         repr_word = max(counts.items(), key=lambda x: x[1])[0]
         stem2repr[stem] = repr_word
     return stem2repr
@@ -63,7 +60,7 @@ def find_most_frequent_original_forms(stem2original):
 def benjamini_hochberg_correction(pvals, alpha=0.05):
     """
     Performs the Benjamini-Hochberg FDR correction on a list of p-values.
-    Returns a list indicating which hypotheses are rejected.
+    Returns a boolean array indicating which hypotheses are rejected.
     """
     n = len(pvals)
     sorted_indices = np.argsort(pvals)
@@ -80,31 +77,25 @@ def benjamini_hochberg_correction(pvals, alpha=0.05):
 def apply_word_grouping(text, word_group_mapping):
     """
     Replace grouped words with their group name.
-    Grouped words are not stemmed.
+    Grouped words are not stemmed and are treated as single tokens.
     """
     if not word_group_mapping:
         return text
-    # Flatten all grouped words
-    all_grouped_words = [word for words in word_group_mapping.values() for word in words]
-    # Sort by length descending to replace longer phrases first
-    all_grouped_words_sorted = sorted(all_grouped_words, key=lambda x: len(x), reverse=True)
-    # Escape special regex characters
-    all_grouped_words_escaped = [re.escape(word) for word in all_grouped_words_sorted]
-    # Create regex pattern with word boundaries
-    pattern = re.compile(r'\b(?:' + '|'.join(all_grouped_words_escaped) + r')\b', re.IGNORECASE)
 
-    # Mapping from lowercase word to group name
+    all_grouped_words = [word for words in word_group_mapping.values() for word in words]
+    all_grouped_words_sorted = sorted(all_grouped_words, key=lambda x: len(x), reverse=True)
+    all_grouped_words_escaped = [re.escape(word) for word in all_grouped_words_sorted]
+
+    pattern = re.compile(r'\b(?:' + '|'.join(all_grouped_words_escaped) + r')\b', re.IGNORECASE)
     word_to_group = {}
     for group, words in word_group_mapping.items():
         for word in words:
             word_to_group[word.lower()] = group.lower()
 
-    # Function to replace matched word with group name
     def replace_match(match):
         matched_word = match.group(0).lower()
         return word_to_group.get(matched_word, matched_word)
 
-    # Replace in text
     return pattern.sub(replace_match, text)
 
 def add_footer():
@@ -142,7 +133,7 @@ def load_data(uploaded_file):
 def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords, word_group_mapping, progress):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
-    Includes progress updates.
+    Updates the progress bar to indicate analysis steps.
     """
     # Apply Word Grouping
     progress.progress(5)
@@ -152,8 +143,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
     progress.progress(10)
     stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else []
     stemmer_obj = LANGUAGES[chosen_lang]["stemmer"] if stem_words else None
-    
-    # Add custom stopwords if provided
+
     if custom_stopwords:
         stop_words.extend(custom_stopwords)
 
@@ -161,26 +151,20 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
     category_freq = {}
     category_counts = {}
     total_terms = 0
-
     stem2original = {}
     categories = df[category_col].dropna().unique()
 
-    # Initialize frequency dictionaries
     for cat in categories:
         category_freq[cat] = {}
         category_counts[cat] = 0
 
-    # Initialize word frequency for summary stats
     word_freq = {}
-
-    # Extract group names to skip stemming
     group_names = set(word_group_mapping.keys())
 
-    # Preprocessing and frequency counting
     progress.progress(20)
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         cat = row[category_col]
-        text = row[text_col]
+        text = str(row[text_col])
         terms, tokens = preprocess_text(
             text,
             lang=chosen_lang,
@@ -207,43 +191,36 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
                     if token in group_names:
                         ngram = token
                     else:
-                        ngram = stemmer_obj.stemWord(token) if stem_words else token
+                        ngram = stemmer_obj.stemWord(token) if (stem_words and stemmer_obj) else token
                 else:
-                    if stem_words:
+                    if stem_words and stemmer_obj:
                         ngram = "_".join([stemmer_obj.stemWord(tok) if tok not in group_names else tok for tok in tokens[i:i+n]])
                     else:
                         ngram = "_".join(tokens[i:i+n])
                 selected_terms.append(ngram)
 
-        # If unigrams are included and stemming is applied, map stems to original forms
-        if 1 in ngram_ranges and stem_words:
-            for stemmed_token, orig in zip(
-                [term.split("_")[0] for term in selected_terms if '_' not in term],
-                tokens
-            ):
+        if 1 in ngram_ranges and stem_words and stemmer_obj:
+            for stemmed_token, orig in zip([term.split("_")[0] for term in selected_terms if '_' not in term], tokens):
                 if stemmed_token not in stem2original:
                     stem2original[stemmed_token] = {}
                 stem2original[stemmed_token][orig] = stem2original[stemmed_token].get(orig, 0) + 1
 
-        # Update frequency counts
         for t in selected_terms:
             overall_freq[t] = overall_freq.get(t, 0) + 1
             category_freq[cat][t] = category_freq[cat].get(t, 0) + 1
         category_counts[cat] += len(selected_terms)
         total_terms += len(selected_terms)
 
-    # Filtering frequencies
     progress.progress(35)
     overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1 and v >= min_freq}
     for cat in categories:
         category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq_filtered}
 
-    if 1 in ngram_ranges and stem_words:
+    if 1 in ngram_ranges and stem_words and stem2original:
         stem2repr = find_most_frequent_original_forms(stem2original)
     else:
         stem2repr = {}
 
-    # Statistical testing
     progress.progress(50)
     all_pvals = []
     all_terms = []
@@ -258,8 +235,6 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
         for t in cat_vocab:
             x = cat_vocab[t]
             K = overall_freq_filtered[t]
-
-            # Hypergeometric test
             pval_over = hypergeom.sf(x-1, total_terms, K, n)
             pval_under = hypergeom.cdf(x, total_terms, K, n)
             pval = min(pval_over, pval_under)
@@ -271,11 +246,9 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             all_K.append(K)
             all_n.append(n)
 
-    # Multiple testing correction
     progress.progress(65)
     rejected = benjamini_hochberg_correction(all_pvals, alpha=alpha)
 
-    # Compile results
     progress.progress(80)
     final_data = []
     for i in range(len(all_terms)):
@@ -286,28 +259,24 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
         n = all_n[i]
         pval = all_pvals[i]
 
-        # Compute test-value
         epsilon = 1e-9
         term_ratio = x / (n + epsilon)
         global_ratio = K / (total_terms + epsilon)
         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
 
-        if 1 in ngram_ranges and stem_words:
+        if 1 in ngram_ranges and stem_words and stem2repr:
             stem = t.split("_")[0]
             term_repr = stem2repr.get(stem, t)
         else:
             term_repr = t
 
-        # Replace underscores with spaces for display
         term_repr_display = term_repr.replace("_", " ")
 
-        # Format P-Value
         if pval < 0.001:
             pval_formatted = "<.001"
         else:
             pval_formatted = f"{pval:.3f}".lstrip('0') if pval >= 0.001 else "<.001"
 
-        # Include only significant words
         if rejected[i]:
             final_data.append({
                 "Category": cat,
@@ -318,27 +287,22 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
                 "P-Value": pval_formatted
             })
 
-    result_df = pd.DataFrame(final_data)
-    result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
+    result_df = pd.DataFrame(final_data).sort_values(by=["Category", "P-Value"])
 
-    # Compute summary statistics
     num_categories = len(categories)
     total_tokens = sum(word_freq.values())
     total_types = len(word_freq)
     morphological_complexity = round(total_types / total_tokens, 2) if total_tokens > 0 else 0.00
     num_hapax = sum(1 for freq in word_freq.values() if freq == 1)
 
-    # Compute per-category statistics
     category_stats = {}
     for cat in categories:
         cat_df = df[df[category_col] == cat]
         num_instances = len(cat_df)
-        # Calculate tokens and types within the category
         cat_tokens = 0
         cat_types_set = set()
         for text in cat_df[text_col].dropna().astype(str):
             tokens = re.findall(r'\b\w+\b', text.lower())
-            # Apply Word Grouping
             tokens = apply_word_grouping(' '.join(tokens), word_group_mapping).split()
             if remove_sw and stop_words:
                 tokens = [token for token in tokens if token not in stop_words]
@@ -357,6 +321,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             "Number of Hapax": cat_num_hapax
         }
 
+    # Complete the progress bar
+    progress.progress(100)
     return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats
 
 def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
@@ -364,7 +330,6 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
     Displays the characteristic words table and its corresponding bar chart for a given category.
     """
     st.subheader(f"Category: {category}")
-    # Display category-specific statistics
     stats = category_stats.get(category, {})
     st.markdown(f"""
     - **Number of Instances (Documents):** {stats.get('Number of Instances', 0)}
@@ -373,30 +338,24 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
     - **Morphological Complexity (Types/Token Ratio):** {stats.get('Morphological Complexity', 0.00)}
     - **Number of Hapax (Words that appear only once):** {stats.get('Number of Hapax', 0)}
     """)
-    # Display the table
+
     display_table = cat_df[['Term', 'Internal Frequency', 'Global Frequency', 'Test Value', 'P-Value']]
     st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
 
-    # Check if the category has significant words
     if display_table.empty:
         st.write(f"No significant characteristic words found for category **{category}**.")
         return
 
-    # Separate positive and negative test values
-    positive_subset = display_table[display_table['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(top_n)
-    negative_subset = display_table[display_table['Test Value'] < 0].sort_values(by='Test Value').head(top_n)
-
-    # Combine the positive and negative subsets
+    positive_subset = display_table[display_table['Test Value'] > 0].sort_values('Test Value', ascending=False).head(top_n)
+    negative_subset = display_table[display_table['Test Value'] < 0].sort_values('Test Value').head(top_n)
     combined_subset = pd.concat([positive_subset, negative_subset])
 
     if combined_subset.empty:
         st.write(f"No characteristic words with both positive and negative test values for category **{category}**.")
         return
 
-    # Add a new column to indicate the type of test value
     combined_subset['Type'] = combined_subset['Test Value'].apply(lambda x: 'Overrepresented' if x > 0 else 'Underrepresented')
 
-    # Create the bar chart
     fig = px.bar(
         combined_subset,
         x="Test Value",
@@ -409,18 +368,16 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
         color_discrete_map={"Overrepresented": "blue", "Underrepresented": "red"}
     )
 
-    # Update layout for better readability, merging yaxis properties
     fig.update_layout(
         yaxis=dict(
             categoryorder='total ascending',
-            showgrid=False  # Remove grid lines for y-axis
+            showgrid=False
         ),
         legend_title_text='Word Representation',
-        plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
+        plot_bgcolor='rgba(0,0,0,0)',
         xaxis=dict(showgrid=True, gridcolor='lightgray'),
     )
 
-    # Add horizontal line at x=0 for reference
     fig.add_shape(
         dict(
             type='line',
@@ -434,11 +391,10 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
 
     st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, word_group_mapping):
+def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats):
     """
     Displays the summary statistics and the results table along with corresponding bar charts.
     """
-    # Summary statistics at the top
     st.write("### 📈 Summary Statistics")
     st.markdown(f"""
     - **Number of Categories:** {num_categories}
@@ -457,7 +413,7 @@ def display_results(result_df, categories, num_categories, total_tokens, total_t
     - **Internal Frequency:** Number of times the term appears within the category.
     - **Global Frequency:** Number of times the term appears across the entire corpus.
     - **Test Value:** 
-      $$\log_2\left(\frac{x/n}{K/M}\right)$$
+      $$\\log_2\\left(\\frac{x/n}{K/M}\\right)$$
       where:
         - *x* = Internal Frequency
         - *n* = Total terms in the category
@@ -470,7 +426,6 @@ def display_results(result_df, categories, num_categories, total_tokens, total_t
     if result_df.empty:
         st.warning("No significant characteristic words found based on the provided criteria.")
     else:
-        # Iterate through each category and display table + bar chart
         for cat in sorted(categories):
             cat_df = result_df[result_df['Category'] == cat]
             visualize_and_display(cat, cat_df, category_stats, alpha, top_n=10)
@@ -485,14 +440,12 @@ def download_results():
         st.info("No results to download.")
         return
     result_df = st.session_state['result_df']
-    # Selection of download formats
     download_options = st.multiselect(
         "Select download format(s):",
         options=["CSV", "Excel"],
         default=["CSV"]
     )
     if download_options:
-        # Prepare data in selected formats
         download_files = {}
         if "CSV" in download_options:
             csv_buffer = StringIO()
@@ -504,9 +457,7 @@ def download_results():
                 result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
             download_files["characteristic_words.xlsx"] = excel_buffer.getvalue()
         
-        # If multiple formats selected, zip them
         if len(download_files) > 1:
-            # Create a zip file in memory
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zipf:
                 for filename, data in download_files.items():
@@ -518,7 +469,6 @@ def download_results():
                 mime="application/zip"
             )
         else:
-            # Single format download
             for filename, data in download_files.items():
                 mime_type = "text/csv" if filename.endswith('.csv') else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 st.download_button(
@@ -549,55 +499,47 @@ def main():
     st.markdown("""
     **Overview**
     
-    This app allows you to identify characteristic words within different categories of your dataset. By analyzing the frequency of words (or n-grams) in specific categories compared to the entire corpus, you can uncover terms that are uniquely associated with each category. The app provides statistical significance testing to ensure that the identified words are not occurring by chance.
+    This app identifies characteristic words within categories of your dataset. By analyzing frequency of words (or n-grams)
+    in categories compared to the entire corpus, it uncovers terms uniquely associated with each category.
+    Statistical significance testing ensures identified words are not occurring by chance.
     """)
 
     st.sidebar.header("🔧 Configuration")
     uploaded_file = st.sidebar.file_uploader("📂 Upload Your Data", type=["csv", "xlsx", "tsv", "txt"])
 
     # Initialize session_state variables if not already present
-    if 'result_df' not in st.session_state:
-        st.session_state['result_df'] = pd.DataFrame()
-    if 'categories' not in st.session_state:
-        st.session_state['categories'] = []
-    if 'num_categories' not in st.session_state:
-        st.session_state['num_categories'] = 0
-    if 'total_tokens' not in st.session_state:
-        st.session_state['total_tokens'] = 0
-    if 'total_types' not in st.session_state:
-        st.session_state['total_types'] = 0
-    if 'morphological_complexity' not in st.session_state:
-        st.session_state['morphological_complexity'] = 0.00
-    if 'num_hapax' not in st.session_state:
-        st.session_state['num_hapax'] = 0
-    if 'category_stats' not in st.session_state:
-        st.session_state['category_stats'] = {}
-    if 'word_groups' not in st.session_state:
-        st.session_state['word_groups'] = []
+    for var, default in [
+        ('result_df', pd.DataFrame()),
+        ('categories', []),
+        ('num_categories', 0),
+        ('total_tokens', 0),
+        ('total_types', 0),
+        ('morphological_complexity', 0.00),
+        ('num_hapax', 0),
+        ('category_stats', {}),
+        ('word_groups', [])
+    ]:
+        if var not in st.session_state:
+            st.session_state[var] = default
 
     if uploaded_file is not None:
         try:
             df = load_data(uploaded_file)
             st.sidebar.success("✅ File uploaded successfully!")
             
-            # Display available columns for user reference
             st.sidebar.write("### Available Columns:")
             st.sidebar.write(df.columns.tolist())
 
-            # Show data preview
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
 
-            # Column Selection
             text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
             category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
-            # Word Grouping Section
             st.sidebar.write("### Word Grouping")
-            # Button to add a new word group
             if st.sidebar.button("➕ Add Word Group"):
                 st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': [], 'separator': ','})
-            # Display all word groups
+
             for idx, group in enumerate(st.session_state['word_groups']):
                 with st.sidebar.expander(f"Group {idx+1}", expanded=True):
                     group['name'] = st.text_input(f"Group {idx+1} Name", value=group['name'], key=f"group_name_{idx}")
@@ -605,7 +547,6 @@ def main():
                     if group['method'] == "Type custom words":
                         group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
                         group_words_input = st.text_input(f"Group {idx+1} Words", value=", ".join(group['words']), key=f"group_words_{idx}")
-                        # Update words list based on input
                         if group_words_input:
                             group['words'] = [word.strip().lower() for word in group_words_input.split(group['separator']) if word.strip()]
                         else:
@@ -618,15 +559,12 @@ def main():
                             group['words'] = [word.strip().lower() for word in words_content.split(group['separator']) if word.strip()]
                         elif not group['words']:
                             group['words'] = []
-                    # Checkbox to mark the group for removal
                     remove_group = st.checkbox(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}")
                     if remove_group:
                         st.session_state['word_groups'].pop(idx)
-                        # Instead of st.experimental_rerun(), use a flag to exit the loop and refresh
                         st.experimental_set_query_params(refresh='true')
                         st.stop()
 
-            # Process word groups into a mapping
             word_group_mapping = {}
             for group in st.session_state['word_groups']:
                 group_name = group['name'].strip().lower()
@@ -635,9 +573,7 @@ def main():
                 elif group_name and '_' in group_name:
                     st.sidebar.error(f"Group name '{group['name']}' should not contain underscores '_'. Please rename it.")
 
-            # Word Exclusion Section
             st.sidebar.write("### Word Exclusion")
-            # Custom Stopword List Options
             custom_stopword_option = st.sidebar.radio(
                 "Choose how to provide custom stopwords:",
                 options=["None", "Type custom stopwords", "Upload custom stopwords file"],
@@ -645,33 +581,28 @@ def main():
             )
             
             custom_stopwords = []
-            
             if custom_stopword_option == "Type custom stopwords":
-                separator_sw = st.sidebar.text_input("📝 Enter a custom separator (e.g., comma, space):", value=",")
-                custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by your chosen separator:")
+                separator_sw = st.sidebar.text_input("📝 Enter a custom separator:", value=",")
+                custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords:")
                 if custom_stopword_input:
                     custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(separator_sw) if word.strip()]
-            
             elif custom_stopword_option == "Upload custom stopwords file":
                 uploaded_stopword_file = st.sidebar.file_uploader("📂 Upload a custom stopwords file (.txt):", type=["txt"])
-                separator_sw = st.sidebar.text_input("📝 Enter the separator used in your file (e.g., comma, space):", value=",")
+                separator_sw = st.sidebar.text_input("📝 Enter separator:", value=",")
                 if uploaded_stopword_file and separator_sw:
                     stopword_content = uploaded_stopword_file.read().decode('utf-8')
                     custom_stopwords = [word.strip().lower() for word in stopword_content.split(separator_sw) if word.strip()]
 
-            # Stopword Removal Section
             st.sidebar.write("### Stopword Removal")
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             if remove_sw:
                 lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
             else:
-                lang_choice = "English"  # Default language if stopword removal is not selected
+                lang_choice = "English"
 
-            # Stemming Option
             st.sidebar.write("### Stemming")
             stem_words = st.sidebar.checkbox("🪓 Apply stemming?", value=True)
 
-            # N-gram Selection with Multiple Choices
             st.sidebar.write("### N-gram Selection")
             ngram_options = st.sidebar.multiselect(
                 "Select N-grams to consider",
@@ -684,36 +615,29 @@ def main():
             if not ngram_ranges:
                 st.sidebar.error("⚠️ Please select at least one N-gram option.")
 
-            # Minimum Frequency Selection
             st.sidebar.write("### Minimum Frequency")
             min_freq = st.sidebar.number_input(
-                "🔢 Set the minimum frequency for words to be considered in the analysis:",
+                "🔢 Minimum frequency:",
                 min_value=1,
                 max_value=1000,
                 value=1,
                 step=1
             )
 
-            # Significance Level
             st.sidebar.write("### Significance Level")
             alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
 
-            # Run Analysis Button
             if st.sidebar.button("🚀 Run Analysis"):
                 if not ngram_ranges:
                     st.error("⚠️ Please select at least one N-gram option to proceed.")
                 elif not text_col or not category_col:
                     st.error("⚠️ Please select both text and category columns.")
                 else:
-                    # Validate that the selected category column exists
                     if category_col not in df.columns:
-                        st.error(f"⚠️ The selected category column '{category_col}' does not exist in the uploaded dataset.")
+                        st.error(f"⚠️ The selected category column '{category_col}' does not exist.")
                         return
-                    # Proceed with analysis
                     st.header("🔍 Analysis Results")
                     st.write("### Processing...")
-
-                    # Create a progress bar
                     progress = st.progress(0)
 
                     with st.spinner("🕒 Analyzing the corpus..."):
@@ -742,7 +666,7 @@ def main():
                                 num_hapax,
                                 category_stats
                             ) = result
-                            # Store results and settings in session_state
+                            # Store results in session_state
                             st.session_state['result_df'] = result_df
                             st.session_state['categories'] = categories
                             st.session_state['num_categories'] = num_categories
@@ -751,11 +675,8 @@ def main():
                             st.session_state['morphological_complexity'] = morphological_complexity
                             st.session_state['num_hapax'] = num_hapax
                             st.session_state['category_stats'] = category_stats
-                            # Also store settings to persist across reruns
                             st.session_state['alpha'] = alpha
                             st.session_state['remove_sw'] = remove_sw
-                            st.session_state['stemmer_obj'] = LANGUAGES[lang_choice]["stemmer"] if stem_words else None
-                            st.session_state['word_group_mapping'] = word_group_mapping
                             # Display results
                             display_results(
                                 result_df,
@@ -766,9 +687,7 @@ def main():
                                 morphological_complexity,
                                 num_hapax,
                                 alpha,
-                                category_stats,
-                                remove_sw,
-                                word_group_mapping
+                                category_stats
                             )
                         else:
                             st.error("Error during analysis.")
@@ -780,7 +699,6 @@ def main():
     else:
         st.sidebar.info("📥 Awaiting file upload.")
 
-    # Display download button only if analysis has been done
     if 'result_df' in st.session_state and not st.session_state['result_df'].empty:
         download_results()
 
