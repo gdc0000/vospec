@@ -372,4 +372,4 @@ def main():
 
             if st.sidebar.button("🚀 Run Analysis"):
                 if not ngram_ranges:
-                    st.error("⚠️
+                    st.error("⚠️ Error message here")
