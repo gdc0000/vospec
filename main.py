@@ -443,197 +443,188 @@ def main():
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
 
-            text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
-            category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
-
-            st.sidebar.write("### Word Replacements")
-            if st.sidebar.button("➕ Add Replacement"):
-                st.session_state['replacements'].append({'old': '', 'new': ''})
-
-            # Display existing replacements
-            for idx, repl in enumerate(st.session_state.get('replacements', [])):
-                with st.sidebar.expander(f"Replacement {idx+1}", expanded=True):
-                    repl['old'] = st.text_input(f"Original Phrase {idx+1}", value=repl['old'], key=f"repl_old_{idx}")
-                    repl['new'] = st.text_input(f"Replacement {idx+1}", value=repl['new'], key=f"repl_new_{idx}")
-                    remove_repl = st.checkbox(f"🗑️ Remove Replacement {idx+1}", key=f"remove_repl_{idx}")
-                    if remove_repl:
-                        st.session_state['replacements'].pop(idx)
-                        st.experimental_rerun()
-
-            # Convert replacements list to dictionary
-            replacements = {repl['old']: repl['new'] for repl in st.session_state.get('replacements', []) if repl['old'] and repl['new']}
-
-            st.sidebar.write("### Stopword Removal")
-            remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
-            if remove_sw:
-                lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
+            # Verify if the DataFrame has any columns
+            if df.empty:
+                st.sidebar.error("⚠️ The uploaded file is empty.")
             else:
-                lang_choice = "English"
+                # User selects the text and category columns
+                text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
+                category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
-            st.sidebar.write("### Custom Stopwords")
-            custom_stopword_option = st.sidebar.radio(
-                "Choose how to provide custom stopwords:",
-                options=["None", "Type custom stopwords"],
-                index=0
-            )
-            
-            custom_stopwords = []
-            if custom_stopword_option == "Type custom stopwords":
-                custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by commas:")
-                if custom_stopword_input:
-                    custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(',') if word.strip()]
+                # Check if the selected columns are valid
+                if text_col not in df.columns:
+                    st.sidebar.error(f"⚠️ The text column '{text_col}' does not exist in the data.")
+                if category_col not in df.columns:
+                    st.sidebar.error(f"⚠️ The category column '{category_col}' does not exist in the data.")
 
-            st.sidebar.write("### Lemmatization")
-            lemmatize = st.sidebar.checkbox("📝 Apply lemmatization?", value=True)
+                st.sidebar.write("### Word Replacements")
+                if st.sidebar.button("➕ Add Replacement"):
+                    st.session_state['replacements'].append({'old': '', 'new': ''})
 
-            st.sidebar.write("### N-gram Selection")
-            ngram_options = st.sidebar.multiselect(
-                "Select N-grams to consider",
-                options=["Unigrams", "Bigrams", "Trigrams"],
-                default=["Unigrams"]
-            )
-            ngram_mapping = {"Unigrams": 1, "Bigrams": 2, "Trigrams": 3}
-            ngram_ranges = sorted([ngram_mapping[ngram] for ngram in ngram_options])
+                # Display existing replacements
+                for idx, repl in enumerate(st.session_state.get('replacements', [])):
+                    with st.sidebar.expander(f"Replacement {idx+1}", expanded=True):
+                        repl['old'] = st.text_input(f"Original Phrase {idx+1}", value=repl['old'], key=f"repl_old_{idx}")
+                        repl['new'] = st.text_input(f"Replacement {idx+1}", value=repl['new'], key=f"repl_new_{idx}")
+                        remove_repl = st.checkbox(f"🗑️ Remove Replacement {idx+1}", key=f"remove_repl_{idx}")
+                        if remove_repl:
+                            st.session_state['replacements'].pop(idx)
+                            st.experimental_rerun()
 
-            if not ngram_ranges:
-                st.sidebar.error("⚠️ Please select at least one N-gram option.")
+                # Convert replacements list to dictionary
+                replacements = {repl['old']: repl['new'] for repl in st.session_state.get('replacements', []) if repl['old'] and repl['new']}
 
-            st.sidebar.write("### Minimum Frequency")
-            min_freq = st.sidebar.number_input(
-                "🔢 Minimum frequency:",
-                min_value=1,
-                max_value=1000,
-                value=1,
-                step=1
-            )
-
-            st.sidebar.write("### Significance Level")
-            alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
-
-            st.sidebar.write("### Categories to Analyze")
-            all_categories = df[category_col].dropna().unique().tolist()
-            selected_categories = st.sidebar.multiselect(
-                "Select categories to analyze",
-                options=all_categories,
-                default=[]
-            )
-
-            if st.sidebar.button("🚀 Run Analysis"):
-                if not ngram_ranges:
-                    st.error("⚠️ Please select at least one N-gram option to proceed.")
-                elif not text_col or not category_col:
-                    st.error("⚠️ Please select both text and category columns.")
-                elif not selected_categories:
-                    st.error("⚠️ Please select at least one category to analyze.")
+                st.sidebar.write("### Stopword Removal")
+                remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
+                if remove_sw:
+                    lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
                 else:
-                    st.header("🔍 Analysis Results")
-                    st.write("### Processing...")
-                    progress = st.progress(0)
+                    lang_choice = "English"
 
-                    with st.spinner("🕒 Analyzing the corpus..."):
-                        characteristic_words_df, frequency_inventory = perform_analysis(
-                            df,
-                            text_col,
-                            category_col,
-                            selected_categories,
-                            remove_sw,
-                            lemmatize,
-                            lemmatizer,
-                            ngram_ranges,
-                            min_freq,
-                            alpha,
-                            custom_stopwords,
-                            replacements,
-                            progress,
-                            lang_choice
-                        )
-                        # Store results in session_state
-                        st.session_state['result_df'] = characteristic_words_df
-                        st.session_state['frequency_inventory'] = frequency_inventory
-                        st.session_state['categories'] = selected_categories
-                        st.session_state['num_categories'] = len(selected_categories)
-                        st.session_state['total_tokens'] = frequency_inventory['Frequency'].sum()
-                        st.session_state['total_types'] = frequency_inventory['Word'].nunique()
-                        st.session_state['morphological_complexity'] = round(st.session_state['total_types'] / st.session_state['total_tokens'], 2) if st.session_state['total_tokens'] > 0 else 0.00
-                        st.session_state['num_hapax'] = (frequency_inventory['Frequency'] == 1).sum()
-                        # Compute category_stats
-                        category_stats = {}
-                        for cat in selected_categories:
-                            cat_df = df[df[category_col] == cat]
-                            num_instances = len(cat_df)
-                            cat_tokens = 0
-                            cat_types_set = set()
-                            for text in cat_df[text_col].dropna().astype(str):
-                                tokens = re.findall(r'\b\w+\b', text.lower())
-                                terms, tokens_processed = preprocess_text(
-                                    ' '.join(tokens),
-                                    lang=lang_choice,
-                                    remove_stopwords=remove_sw,
-                                    lemmatize=lemmatize,
-                                    lemmatizer_obj=lemmatizer_obj,
-                                    ngram_ranges=[1],
-                                    stop_words=stop_words
+                st.sidebar.write("### Custom Stopwords")
+                custom_stopword_option = st.sidebar.radio(
+                    "Choose how to provide custom stopwords:",
+                    options=["None", "Type custom stopwords"],
+                    index=0
+                )
+                
+                custom_stopwords = []
+                if custom_stopword_option == "Type custom stopwords":
+                    custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by commas:")
+                    if custom_stopword_input:
+                        custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(',') if word.strip()]
+
+                st.sidebar.write("### Lemmatization")
+                lemmatize = st.sidebar.checkbox("📝 Apply lemmatization?", value=True)
+
+                st.sidebar.write("### N-gram Selection")
+                ngram_options = st.sidebar.multiselect(
+                    "Select N-grams to consider",
+                    options=["Unigrams", "Bigrams", "Trigrams"],
+                    default=["Unigrams"]
+                )
+                ngram_mapping = {"Unigrams": 1, "Bigrams": 2, "Trigrams": 3}
+                ngram_ranges = sorted([ngram_mapping[ngram] for ngram in ngram_options])
+
+                if not ngram_ranges:
+                    st.sidebar.error("⚠️ Please select at least one N-gram option.")
+
+                st.sidebar.write("### Minimum Frequency")
+                min_freq = st.sidebar.number_input(
+                    "🔢 Minimum frequency:",
+                    min_value=1,
+                    max_value=1000,
+                    value=1,
+                    step=1
+                )
+
+                st.sidebar.write("### Significance Level")
+                alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
+
+                st.sidebar.write("### Categories to Analyze")
+                all_categories = df[category_col].dropna().unique().tolist()
+                selected_categories = st.sidebar.multiselect(
+                    "Select categories to analyze",
+                    options=all_categories,
+                    default=[]
+                )
+
+                if st.sidebar.button("🚀 Run Analysis"):
+                    # Validate selections
+                    if not ngram_ranges:
+                        st.error("⚠️ Please select at least one N-gram option to proceed.")
+                    elif not text_col or not category_col:
+                        st.error("⚠️ Please select both text and category columns.")
+                    elif not selected_categories:
+                        st.error("⚠️ Please select at least one category to analyze.")
+                    else:
+                        st.header("🔍 Analysis Results")
+                        st.write("### Processing...")
+                        progress = st.progress(0)
+
+                        with st.spinner("🕒 Analyzing the corpus..."):
+                            try:
+                                characteristic_words_df, frequency_inventory = perform_analysis(
+                                    df,
+                                    text_col,
+                                    category_col,
+                                    selected_categories,
+                                    remove_sw,
+                                    lemmatize,
+                                    lemmatizer,
+                                    ngram_ranges,
+                                    min_freq,
+                                    alpha,
+                                    custom_stopwords,
+                                    replacements,
+                                    progress,
+                                    lang_choice
                                 )
-                                cat_tokens += len(tokens_processed)
-                                cat_types_set.update(tokens_processed)
-                            cat_types = len(cat_types_set)
-                            cat_morph_complexity = round(cat_types / cat_tokens, 2) if cat_tokens > 0 else 0.00
-                            # Handle cases where the term might not be found in frequency_inventory
-                            cat_num_hapax = 0
-                            for token in cat_types_set:
-                                freq_row = frequency_inventory.loc[frequency_inventory['Word'] == token, 'Frequency']
-                                if not freq_row.empty and freq_row.values[0] == 1:
-                                    cat_num_hapax += 1
-                            category_stats[cat] = {
-                                "Number of Instances": num_instances,
-                                "Number of Tokens": cat_tokens,
-                                "Number of Types": cat_types,
-                                "Morphological Complexity": cat_morph_complexity,
-                                "Number of Hapax": cat_num_hapax
-                            }
-                        st.session_state['category_stats'] = category_stats
-                        st.session_state['alpha'] = alpha
-                        # Display results
-                        display_results(
-                            characteristic_words_df,
-                            frequency_inventory,
-                            selected_categories,
-                            len(selected_categories),
-                            st.session_state['total_tokens'],
-                            st.session_state['total_types'],
-                            st.session_state['morphological_complexity'],
-                            st.session_state['num_hapax'],
-                            alpha,
-                            category_stats
-                        )
+                                # Store results in session_state
+                                st.session_state['result_df'] = characteristic_words_df
+                                st.session_state['frequency_inventory'] = frequency_inventory
+                                st.session_state['categories'] = selected_categories
+                                st.session_state['num_categories'] = len(selected_categories)
+                                st.session_state['total_tokens'] = frequency_inventory['Frequency'].sum()
+                                st.session_state['total_types'] = frequency_inventory['Word'].nunique()
+                                st.session_state['morphological_complexity'] = round(st.session_state['total_types'] / st.session_state['total_tokens'], 2) if st.session_state['total_tokens'] > 0 else 0.00
+                                st.session_state['num_hapax'] = (frequency_inventory['Frequency'] == 1).sum()
+                                # Compute category_stats
+                                category_stats = {}
+                                for cat in selected_categories:
+                                    cat_df = df[df[category_col] == cat]
+                                    num_instances = len(cat_df)
+                                    cat_tokens = 0
+                                    cat_types_set = set()
+                                    for text in cat_df[text_col].dropna().astype(str):
+                                        tokens = re.findall(r'\b\w+\b', text.lower())
+                                        terms, tokens_processed = preprocess_text(
+                                            ' '.join(tokens),
+                                            lang=lang_choice,
+                                            remove_stopwords=remove_sw,
+                                            lemmatize=lemmatize,
+                                            lemmatizer_obj=lemmatizer_obj,
+                                            ngram_ranges=[1],
+                                            stop_words=stop_words
+                                        )
+                                        cat_tokens += len(tokens_processed)
+                                        cat_types_set.update(tokens_processed)
+                                    cat_types = len(cat_types_set)
+                                    cat_morph_complexity = round(cat_types / cat_tokens, 2) if cat_tokens > 0 else 0.00
+                                    # Handle cases where the term might not be found in frequency_inventory
+                                    cat_num_hapax = 0
+                                    for token in cat_types_set:
+                                        freq_row = frequency_inventory.loc[frequency_inventory['Word'] == token, 'Frequency']
+                                        if not freq_row.empty and freq_row.values[0] == 1:
+                                            cat_num_hapax += 1
+                                    category_stats[cat] = {
+                                        "Number of Instances": num_instances,
+                                        "Number of Tokens": cat_tokens,
+                                        "Number of Types": cat_types,
+                                        "Morphological Complexity": cat_morph_complexity,
+                                        "Number of Hapax": cat_num_hapax
+                                    }
+                                st.session_state['category_stats'] = category_stats
+                                st.session_state['alpha'] = alpha
+                                # Display results
+                                display_results(
+                                    characteristic_words_df,
+                                    frequency_inventory,
+                                    selected_categories,
+                                    len(selected_categories),
+                                    st.session_state['total_tokens'],
+                                    st.session_state['total_types'],
+                                    st.session_state['morphological_complexity'],
+                                    st.session_state['num_hapax'],
+                                    alpha,
+                                    category_stats
+                                )
+                            except KeyError as ke:
+                                st.error(f"⚠️ Missing expected column: {ke}")
+                            except Exception as e:
+                                st.error(f"⚠️ An error occurred during analysis: {e}")
 
-        except ValueError as ve:
-            st.sidebar.error(f"⚠️ {ve}")
-        except Exception as e:
-            st.sidebar.error(f"⚠️ Error processing the uploaded file: {e}")
-    else:
-        st.sidebar.info("📥 Awaiting file upload.")
-
-    # Display results from session_state if available
-    if 'result_df' in st.session_state and not st.session_state['result_df'].empty:
-        display_results(
-            st.session_state['result_df'],
-            st.session_state['frequency_inventory'],
-            st.session_state['categories'],
-            st.session_state['num_categories'],
-            st.session_state['total_tokens'],
-            st.session_state['total_types'],
-            st.session_state['morphological_complexity'],
-            st.session_state['num_hapax'],
-            st.session_state['alpha'],
-            st.session_state['category_stats']
-        )
-        download_results(
-            frequency_inventory=st.session_state['frequency_inventory'],
-            characteristic_words_df=st.session_state['result_df']
-        )
-
-# 3. Run the main function and add the footer
-if __name__ == "__main__":
-    main()
-    add_footer()
+    # 3. Run the main function and add the footer
+    if __name__ == "__main__":
+        main()
+        add_footer()
