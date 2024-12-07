@@ -10,9 +10,15 @@ from scipy.stats import hypergeom
 from io import BytesIO
 import plotly.express as px
 
-# Ensure NLTK data is downloaded
+# 1. Set page configuration as the very first Streamlit command
+st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
+
+# 2. Define necessary functions and decorators below
 @st.cache_resource
 def initialize_nltk():
+    """
+    Downloads necessary NLTK data and initializes the WordNetLemmatizer.
+    """
     download('stopwords')
     download('wordnet')
     return WordNetLemmatizer()
@@ -26,9 +32,6 @@ LANGUAGES = {
     "Italian": {"stopwords": stopwords.words("italian")},
     "Spanish": {"stopwords": stopwords.words("spanish")}
 }
-
-# Set page configuration at the very top
-st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
 
 def preprocess_text(text, lang, remove_stopwords, lemmatize, lemmatizer_obj, ngram_ranges, stop_words):
     """
@@ -447,6 +450,7 @@ def main():
             if st.sidebar.button("➕ Add Replacement"):
                 st.session_state['replacements'].append({'old': '', 'new': ''})
 
+            # Display existing replacements
             for idx, repl in enumerate(st.session_state.get('replacements', [])):
                 with st.sidebar.expander(f"Replacement {idx+1}", expanded=True):
                     repl['old'] = st.text_input(f"Original Phrase {idx+1}", value=repl['old'], key=f"repl_old_{idx}")
@@ -629,6 +633,7 @@ def main():
             characteristic_words_df=st.session_state['result_df']
         )
 
+# 3. Run the main function and add the footer
 if __name__ == "__main__":
     main()
     add_footer()
