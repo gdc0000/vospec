@@ -363,29 +363,70 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
 
 def visualize_results(result_df, categories):
     """
-    Generates horizontal bar plots for the most characteristic words per category.
+    Generates horizontal bar plots for the most characteristic words per category,
+    displaying both positive and negative scoring words.
     """
     st.write("### 📊 Most Characteristic Words per Category")
+    
+    # Define the number of top positive and negative words to display
+    top_n = 10
+    
     for cat in categories:
         subset = result_df[result_df['Category'] == cat]
         if subset.empty:
             st.write(f"No significant characteristic words found for category **{cat}**.")
             continue
-        # Select top 10 based on absolute test value
-        subset_sorted = subset.reindex(subset['Test Value'].abs().sort_values(ascending=False).index)
-        top_subset = subset_sorted.head(10)
-
+        
+        # Separate positive and negative test values
+        positive_subset = subset[subset['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(top_n)
+        negative_subset = subset[subset['Test Value'] < 0].sort_values(by='Test Value').head(top_n)
+        
+        # Combine the positive and negative subsets
+        combined_subset = pd.concat([positive_subset, negative_subset])
+        
+        if combined_subset.empty:
+            st.write(f"No characteristic words with both positive and negative test values for category **{cat}**.")
+            continue
+        
+        # Add a new column to indicate the type of test value
+        combined_subset['Type'] = combined_subset['Test Value'].apply(lambda x: 'Overrepresented' if x > 0 else 'Underrepresented')
+        
+        # Create the bar chart
         fig = px.bar(
-            top_subset,
+            combined_subset,
             x="Test Value",
             y="Term",
+            color="Type",
             orientation='h',
             title=f"Top Characteristic Words for Category: {cat}",
             labels={"Test Value": "Test Value", "Term": "Word"},
-            height=400
+            height=600,
+            color_discrete_map={"Overrepresented": "blue", "Underrepresented": "red"}
         )
-        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        
+        # Update layout for better readability
+        fig.update_layout(
+            yaxis={'categoryorder': 'total ascending'},
+            legend_title_text='Word Representation',
+            plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
+            xaxis=dict(showgrid=True, gridcolor='lightgray'),
+            yaxis=dict(showgrid=False),
+        )
+        
+        # Add horizontal line at x=0 for reference
+        fig.add_shape(
+            dict(
+                type='line',
+                x0=0,
+                y0=-0.5,
+                x1=0,
+                y1=len(combined_subset) - 0.5,
+                line=dict(color='black', dash='dash')
+            )
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
+
 
 def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
     """
