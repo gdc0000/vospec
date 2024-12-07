@@ -622,7 +622,9 @@ def main():
                     remove_group = st.checkbox(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}")
                     if remove_group:
                         st.session_state['word_groups'].pop(idx)
-                        st.experimental_rerun()
+                        # Instead of st.experimental_rerun(), use a flag to exit the loop and refresh
+                        st.experimental_set_query_params(refresh='true')
+                        st.stop()
 
             # Process word groups into a mapping
             word_group_mapping = {}
