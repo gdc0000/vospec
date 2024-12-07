@@ -361,78 +361,84 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
     progress.progress(100)
     return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping
 
-def visualize_results(result_df, categories):
+def visualize_and_display(category, cat_df, category_stats, alpha):
     """
-    Generates horizontal bar plots for the most characteristic words per category,
-    displaying both positive and negative scoring words.
+    Displays the characteristic words table and its corresponding bar chart for a given category.
     """
-    st.write("### 📊 Most Characteristic Words per Category")
-    
-    # Define the number of top positive and negative words to display
-    top_n = 10
-    
-    for cat in categories:
-        subset = result_df[result_df['Category'] == cat]
-        if subset.empty:
-            st.write(f"No significant characteristic words found for category **{cat}**.")
-            continue
-        
-        # Separate positive and negative test values
-        positive_subset = subset[subset['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(top_n)
-        negative_subset = subset[subset['Test Value'] < 0].sort_values(by='Test Value').head(top_n)
-        
-        # Combine the positive and negative subsets
-        combined_subset = pd.concat([positive_subset, negative_subset])
-        
-        if combined_subset.empty:
-            st.write(f"No characteristic words with both positive and negative test values for category **{cat}**.")
-            continue
-        
-        # Add a new column to indicate the type of test value
-        combined_subset['Type'] = combined_subset['Test Value'].apply(lambda x: 'Overrepresented' if x > 0 else 'Underrepresented')
-        
-        # Create the bar chart
-        fig = px.bar(
-            combined_subset,
-            x="Test Value",
-            y="Term",
-            color="Type",
-            orientation='h',
-            title=f"Top Characteristic Words for Category: {cat}",
-            labels={"Test Value": "Test Value", "Term": "Word"},
-            height=600,
-            color_discrete_map={"Overrepresented": "blue", "Underrepresented": "red"}
-        )
-        
-        # Update layout for better readability, merging yaxis properties
-        fig.update_layout(
-            yaxis=dict(
-                categoryorder='total ascending',
-                showgrid=False  # Remove grid lines for y-axis
-            ),
-            legend_title_text='Word Representation',
-            plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
-            xaxis=dict(showgrid=True, gridcolor='lightgray'),
-            # Remove the duplicate yaxis keyword
-        )
-        
-        # Add horizontal line at x=0 for reference
-        fig.add_shape(
-            dict(
-                type='line',
-                x0=0,
-                y0=-0.5,
-                x1=0,
-                y1=len(combined_subset) - 0.5,
-                line=dict(color='black', dash='dash')
-            )
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader(f"Category: {category}")
+    # Display category-specific statistics
+    stats = category_stats.get(category, {})
+    st.markdown(f"""
+    - **Number of Instances (Documents):** {stats.get('Number of Instances', 0)}
+    - **Number of Tokens:** {stats.get('Number of Tokens', 0)}
+    - **Number of Types:** {stats.get('Number of Types', 0)}
+    - **Morphological Complexity (Types/Token Ratio):** {stats.get('Morphological Complexity', 0.00)}
+    - **Number of Hapax (Words that appear only once):** {stats.get('Number of Hapax', 0)}
+    """)
+    # Display the table
+    display_table = cat_df[['Term', 'Internal Frequency', 'Global Frequency', 'Test Value', 'P-Value']]
+    st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
 
-def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
+    # Check if the category has significant words
+    if display_table.empty:
+        st.write(f"No significant characteristic words found for category **{category}**.")
+        return
+
+    # Separate positive and negative test values
+    positive_subset = display_table[display_table['Test Value'] > 0].sort_values(by='Test Value', ascending=False).head(10)
+    negative_subset = display_table[display_table['Test Value'] < 0].sort_values(by='Test Value').head(10)
+
+    # Combine the positive and negative subsets
+    combined_subset = pd.concat([positive_subset, negative_subset])
+
+    if combined_subset.empty:
+        st.write(f"No characteristic words with both positive and negative test values for category **{category}**.")
+        return
+
+    # Add a new column to indicate the type of test value
+    combined_subset['Type'] = combined_subset['Test Value'].apply(lambda x: 'Overrepresented' if x > 0 else 'Underrepresented')
+
+    # Create the bar chart
+    fig = px.bar(
+        combined_subset,
+        x="Test Value",
+        y="Term",
+        color="Type",
+        orientation='h',
+        title=f"Top Characteristic Words for Category: {category}",
+        labels={"Test Value": "Test Value", "Term": "Word"},
+        height=600,
+        color_discrete_map={"Overrepresented": "blue", "Underrepresented": "red"}
+    )
+
+    # Update layout for better readability, merging yaxis properties
+    fig.update_layout(
+        yaxis=dict(
+            categoryorder='total ascending',
+            showgrid=False  # Remove grid lines for y-axis
+        ),
+        legend_title_text='Word Representation',
+        plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
+        xaxis=dict(showgrid=True, gridcolor='lightgray'),
+    )
+
+    # Add horizontal line at x=0 for reference
+    fig.add_shape(
+        dict(
+            type='line',
+            x0=0,
+            y0=-0.5,
+            x1=0,
+            y1=len(combined_subset) - 0.5,
+            line=dict(color='black', dash='dash')
+        )
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+def display_results(result_df, categories, num_categories, total_tokens, num_categories_val, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
     """
-    Displays the summary statistics and the results table.
+    Displays the summary statistics and the results table along with corresponding bar charts.
     """
     # Summary statistics at the top
     st.write("### 📈 Summary Statistics")
@@ -445,7 +451,7 @@ def display_results(result_df, total_tokens, num_categories, total_types, morpho
     - **Significance Level (alpha):** {alpha}
     """)
 
-    st.write("### 📄 Characteristic Words Table")
+    st.write("### 📄 Characteristic Words Tables and Visualizations")
     st.markdown("""
     **Table Explanation:**
     - **Category:** The specific group or category within your dataset.
@@ -466,23 +472,10 @@ def display_results(result_df, total_tokens, num_categories, total_types, morpho
     if result_df.empty:
         st.warning("No significant characteristic words found based on the provided criteria.")
     else:
-        # Group by category and display separate sortable tables
-        for cat in sorted(result_df['Category'].unique()):
-            st.subheader(f"Category: {cat}")
-            # Display category-specific statistics
-            stats = category_stats.get(cat, {})
-            st.markdown(f"""
-            - **Number of Instances (Documents):** {stats.get('Number of Instances', 0)}
-            - **Number of Tokens:** {stats.get('Number of Tokens', 0)}
-            - **Number of Types:** {stats.get('Number of Types', 0)}
-            - **Morphological Complexity (Types/Token Ratio):** {stats.get('Morphological Complexity', 0.00)}
-            - **Number of Hapax (Words that appear only once):** {stats.get('Number of Hapax', 0)}
-            """)
-            cat_df = result_df[result_df['Category'] == cat][['Term', 'Internal Frequency', 'Global Frequency', 'Test Value', 'P-Value']]
-            st.dataframe(cat_df.reset_index(drop=True), use_container_width=True)
-
-    # Visualization
-    visualize_results(result_df, sorted(result_df['Category'].unique()))
+        # Iterate through each category and display table + bar chart
+        for cat in sorted(categories):
+            cat_df = result_df[result_df['Category'] == cat]
+            visualize_and_display(cat, cat_df, category_stats, alpha)
 
 def download_results(result_df):
     """
@@ -735,8 +728,10 @@ def main():
                             ) = result
                             display_results(
                                 result_df,
-                                total_tokens,
+                                categories,
                                 num_categories,
+                                total_tokens,
+                                num_categories,  # Corrected variable name
                                 total_types,
                                 morphological_complexity,
                                 num_hapax,
