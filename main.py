@@ -26,7 +26,7 @@ def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram
     tokens = re.findall(r'\b\w+\b', text.lower())
 
     # Remove stopwords if requested
-    if remove_sw and stop_words:
+    if remove_stopwords and stop_words:
         tokens = [token for token in tokens if token not in stop_words]
 
     # Stemming if requested and token not in group_names
@@ -41,8 +41,11 @@ def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram
         if n > len(stemmed_tokens):
             continue
         for i in range(len(stemmed_tokens) - n + 1):
-            ngram = "_".join(stemmed_tokens[i:i+n])
-            final_terms.append(ngram)
+            if n == 1:
+                term = stemmed_tokens[i]
+            else:
+                term = "_".join(stemmed_tokens[i:i+n])
+            final_terms.append(term)
 
     return final_terms, tokens
 
@@ -199,20 +202,17 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             if n > len(tokens):
                 continue
             for i in range(len(tokens) - n + 1):
-                if stem_words and n == 1:
-                    # If stemming and unigram, ensure group names are not stemmed
+                if n == 1:
                     token = tokens[i]
                     if token in group_names:
                         ngram = token
                     else:
-                        ngram = stemmer_obj.stemWord(token)
-                elif stem_words:
-                    ngram = stemmer_obj.stemWord(tokens[i])
+                        ngram = stemmer_obj.stemWord(token) if stem_words else token
                 else:
-                    ngram = tokens[i]
-                # For n-grams
-                if n > 1:
-                    ngram = "_".join(stemmer_obj.stemWord(tok) if stem_words and tok not in group_names else tok for tok in tokens[i:i+n])
+                    if stem_words:
+                        ngram = "_".join([stemmer_obj.stemWord(tok) if tok not in group_names else tok for tok in tokens[i:i+n]])
+                    else:
+                        ngram = "_".join(tokens[i:i+n])
                 selected_terms.append(ngram)
 
         # If unigrams are included and stemming is applied, map stems to original forms
@@ -359,7 +359,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
 
     # Update progress: Done
     progress.progress(100)
-    return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats
+    return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping
 
 def visualize_results(result_df, categories):
     """
@@ -387,7 +387,7 @@ def visualize_results(result_df, categories):
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats):
+def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stop_words, stemmer_obj, word_group_mapping):
     """
     Displays the summary statistics and the results table.
     """
@@ -545,10 +545,10 @@ def main():
                     group['method'] = st.radio(f"Group {idx+1} Words Input Method", ["Type custom words", "Upload custom words file"], key=f"group_method_{idx}")
                     if group['method'] == "Type custom words":
                         group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
-                        group_words = st.text_input(f"Group {idx+1} Words", value=", ".join(group['words']), key=f"group_words_{idx}")
+                        group_words_input = st.text_input(f"Group {idx+1} Words", value=", ".join(group['words']), key=f"group_words_{idx}")
                         # Update words list based on input
-                        if group_words:
-                            group['words'] = [word.strip().lower() for word in group_words.split(group['separator']) if word.strip()]
+                        if group_words_input:
+                            group['words'] = [word.strip().lower() for word in group_words_input.split(group['separator']) if word.strip()]
                         else:
                             group['words'] = []
                     else:
@@ -557,10 +557,11 @@ def main():
                         if group_file and group['separator']:
                             words_content = group_file.read().decode('utf-8')
                             group['words'] = [word.strip().lower() for word in words_content.split(group['separator']) if word.strip()]
-                        elif group['words'] is None:
+                        elif not group['words']:
                             group['words'] = []
-                    # Button to remove the group
-                    if st.button(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}"):
+                    # Checkbox to mark the group for removal
+                    remove_group = st.checkbox(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}")
+                    if remove_group:
                         st.session_state['word_groups'].pop(idx)
                         st.experimental_rerun()
 
@@ -572,7 +573,7 @@ def main():
                     word_group_mapping[group_name] = group['words']
                 elif group_name and '_' in group_name:
                     st.sidebar.error(f"Group name '{group['name']}' should not contain underscores '_'. Please rename it.")
-            
+
             # Word Exclusion Section
             st.sidebar.write("### Word Exclusion")
             # Custom Stopword List Options
@@ -664,9 +665,35 @@ def main():
                             word_group_mapping,
                             progress
                         )
-                        if len(result) == 8:
-                            result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats = result
-                            display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats)
+                        if len(result) == 12:
+                            (
+                                result_df,
+                                categories,
+                                num_categories,
+                                total_tokens,
+                                total_types,
+                                morphological_complexity,
+                                num_hapax,
+                                category_stats,
+                                remove_sw_returned,
+                                stop_words_returned,
+                                stemmer_obj_returned,
+                                word_group_mapping_returned
+                            ) = result
+                            display_results(
+                                result_df,
+                                total_tokens,
+                                num_categories,
+                                total_types,
+                                morphological_complexity,
+                                num_hapax,
+                                alpha,
+                                category_stats,
+                                remove_sw_returned,
+                                stop_words_returned,
+                                stemmer_obj_returned,
+                                word_group_mapping_returned
+                            )
                             download_results(result_df)
                         else:
                             st.error("Error during analysis.")
