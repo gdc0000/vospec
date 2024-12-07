@@ -196,6 +196,8 @@ def perform_analysis(df, text_col, category_col, selected_categories, remove_sw,
         for t in cat_vocab:
             x = cat_vocab[t]
             K = corpus_freq.get(t, 0)
+            if K == 0:
+                continue  # Avoid division by zero
             pval_over = hypergeom.sf(x-1, len(corpus_terms), K, n)
             pval_under = hypergeom.cdf(x, len(corpus_terms), K, n)
             pval = min(pval_over, pval_under)
@@ -539,7 +541,7 @@ def main():
                         st.session_state['total_types'] = frequency_inventory['Word'].nunique()
                         st.session_state['morphological_complexity'] = round(st.session_state['total_types'] / st.session_state['total_tokens'], 2) if st.session_state['total_tokens'] > 0 else 0.00
                         st.session_state['num_hapax'] = (frequency_inventory['Frequency'] == 1).sum()
-                        # Since categories are selected, compute category_stats if needed
+                        # Compute category_stats
                         category_stats = {}
                         for cat in selected_categories:
                             cat_df = df[df[category_col] == cat]
@@ -548,7 +550,7 @@ def main():
                             cat_types_set = set()
                             for text in cat_df[text_col].dropna().astype(str):
                                 tokens = re.findall(r'\b\w+\b', text.lower())
-                                tokens = preprocess_text(
+                                terms, tokens_processed = preprocess_text(
                                     ' '.join(tokens),
                                     lang=lang_choice,
                                     remove_stopwords=remove_sw,
@@ -556,9 +558,9 @@ def main():
                                     stemmer_obj=LANGUAGES[lang_choice]["stemmer"] if stem_words else None,
                                     ngram_ranges=[1],
                                     stop_words=stop_words
-                                )[1]
-                                cat_tokens += len(tokens)
-                                cat_types_set.update(tokens)
+                                )
+                                cat_tokens += len(tokens_processed)
+                                cat_types_set.update(tokens_processed)
                             cat_types = len(cat_types_set)
                             cat_morph_complexity = round(cat_types / cat_tokens, 2) if cat_tokens > 0 else 0.00
                             cat_num_hapax = sum(1 for token in cat_types_set if frequency_inventory.loc[frequency_inventory['Word'] == token, 'Frequency'].values[0] == 1)
