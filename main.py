@@ -2,15 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
+import math
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk import download
 from scipy.stats import hypergeom
 from io import BytesIO
-import math
 import plotly.express as px
 
-# Download necessary NLTK data
+# Ensure NLTK data is downloaded
 @st.cache_resource
 def initialize_nltk():
     download('stopwords')
@@ -388,7 +388,9 @@ def main():
     """
     Main function to run the Streamlit app.
     """
+    # Set page configuration at the very top
     st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
+
     st.title("📊 Characteristic Words Detection in Corpus Linguistics")
 
     st.markdown("""
