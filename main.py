@@ -434,7 +434,7 @@ def visualize_and_display(category, cat_df, category_stats, alpha, top_n=10):
 
     st.plotly_chart(fig, use_container_width=True)
 
-def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, stemmer_obj, word_group_mapping):
+def display_results(result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, alpha, category_stats, remove_sw, word_group_mapping):
     """
     Displays the summary statistics and the results table along with corresponding bar charts.
     """
@@ -572,6 +572,8 @@ def main():
         st.session_state['num_hapax'] = 0
     if 'category_stats' not in st.session_state:
         st.session_state['category_stats'] = {}
+    if 'word_groups' not in st.session_state:
+        st.session_state['word_groups'] = []
 
     if uploaded_file is not None:
         try:
@@ -592,8 +594,6 @@ def main():
 
             # Word Grouping Section
             st.sidebar.write("### Word Grouping")
-            if 'word_groups' not in st.session_state:
-                st.session_state['word_groups'] = []
             # Button to add a new word group
             if st.sidebar.button("➕ Add Word Group"):
                 st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': [], 'separator': ','})
@@ -752,7 +752,7 @@ def main():
                             # Also store settings to persist across reruns
                             st.session_state['alpha'] = alpha
                             st.session_state['remove_sw'] = remove_sw
-                            st.session_state['stemmer_obj'] = stemmer_obj
+                            st.session_state['stemmer_obj'] = LANGUAGES[lang_choice]["stemmer"] if stem_words else None
                             st.session_state['word_group_mapping'] = word_group_mapping
                             # Display results
                             display_results(
@@ -766,7 +766,6 @@ def main():
                                 alpha,
                                 category_stats,
                                 remove_sw,
-                                stemmer_obj,
                                 word_group_mapping
                             )
                         else:
