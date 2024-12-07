@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import re
 from scipy.stats import hypergeom
 import math
@@ -8,13 +7,38 @@ from io import BytesIO
 import plotly.express as px
 
 # Preprocess text: Tokenize and remove stopwords
-def preprocess_text(text, stop_words):
+def preprocess_text(text, stop_words, ngram_levels):
     tokens = re.findall(r'\b\w+\b', text.lower())
     if stop_words:
         tokens = [token for token in tokens if token not in stop_words]
-    return tokens
 
-# Apply word grouping: Replace words based on a mapping
+    # Generate n-grams based on selected levels
+    ngrams = []
+    for n in ngram_levels:
+        if n > len(tokens):
+            continue
+        ngrams.extend([" ".join(tokens[i:i+n]) for i in range(len(tokens) - n + 1)])
+    return ngrams
+
+# Parse word group mapping from user input
+def parse_word_group_mapping(mapping_input):
+    word_group_mapping = {}
+    if not mapping_input.strip():
+        return word_group_mapping
+    try:
+        mappings = mapping_input.split(",")
+        for mapping in mappings:
+            match = re.match(r'"(.*?)"\s*=\s*"(.*?)"', mapping.strip())
+            if match:
+                word, group = match.groups()
+                word_group_mapping[word.lower()] = group.lower()
+            else:
+                raise ValueError(f"Invalid mapping syntax: {mapping.strip()}")
+    except Exception as e:
+        st.error(f"Error parsing word group mapping: {e}")
+    return word_group_mapping
+
+# Apply word grouping
 def apply_word_grouping(text, word_group_mapping):
     if not word_group_mapping:
         return text
@@ -23,7 +47,7 @@ def apply_word_grouping(text, word_group_mapping):
     return text
 
 # Perform characteristic words analysis
-def perform_analysis(df, text_col, category_col, stop_words, word_group_mapping):
+def perform_analysis(df, text_col, category_col, stop_words, word_group_mapping, ngram_levels):
     # Apply word grouping
     df[text_col] = df[text_col].apply(lambda x: apply_word_grouping(str(x), word_group_mapping))
 
@@ -38,7 +62,7 @@ def perform_analysis(df, text_col, category_col, stop_words, word_group_mapping)
         texts = df[df[category_col] == category][text_col]
         category_terms = []
         for text in texts:
-            tokens = preprocess_text(text, stop_words)
+            tokens = preprocess_text(text, stop_words, ngram_levels)
             category_terms.extend(tokens)
             for token in tokens:
                 overall_freq[token] = overall_freq.get(token, 0) + 1
@@ -99,14 +123,12 @@ def main():
         category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
         # Word grouping
-        word_group_file = st.sidebar.file_uploader("Upload Word Group Mapping (CSV/Excel)", type=["csv", "xlsx"])
-        word_group_mapping = {}
-        if word_group_file:
-            if word_group_file.name.endswith(".csv"):
-                word_group_df = pd.read_csv(word_group_file)
-            else:
-                word_group_df = pd.read_excel(word_group_file)
-            word_group_mapping = dict(zip(word_group_df["word"], word_group_df["group"]))
+        st.sidebar.write("### Word Group Mapping")
+        word_group_input = st.sidebar.text_area(
+            "Enter word group mappings in the format: \"expression\"=\"group\", separated by commas.",
+            help='Example: "donald trump"="politics","virus"="health"'
+        )
+        word_group_mapping = parse_word_group_mapping(word_group_input)
 
         # Stopword removal
         remove_stopwords = st.sidebar.checkbox("Remove Stopwords?", value=True)
@@ -114,12 +136,21 @@ def main():
         if remove_stopwords:
             stop_words_input = st.sidebar.text_area("Enter Stopwords (comma-separated)", value="")
             if stop_words_input:
-                stop_words = [word.strip() for word in stop_words_input.split(",")]
+                stop_words = [word.strip().lower() for word in stop_words_input.split(",")]
+
+        # N-gram selection
+        st.sidebar.write("### N-gram Levels")
+        ngram_levels = st.sidebar.multiselect(
+            "Select N-gram Levels for Analysis",
+            options=[1, 2, 3],
+            format_func=lambda x: f"{x}-grams",
+            default=[1]
+        )
 
         # Run analysis
         if st.sidebar.button("Run Analysis"):
             with st.spinner("Processing..."):
-                results_df, overall_freq = perform_analysis(df, text_col, category_col, stop_words, word_group_mapping)
+                results_df, overall_freq = perform_analysis(df, text_col, category_col, stop_words, word_group_mapping, ngram_levels)
 
                 # Display results
                 st.subheader("Corpus-Wide Word Frequencies")
