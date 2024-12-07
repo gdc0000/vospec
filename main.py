@@ -1,55 +1,44 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem.snowball import SnowballStemmer
-from nltk.tokenize import word_tokenize
+import re
+from stop_words import get_stop_words
+from snowballstemmer import stemmer
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
 from io import StringIO, BytesIO
 import math
 import plotly.express as px
 
-# Ensure NLTK resources are available
-@st.cache_resource
-def download_nltk_resources():
-    nltk.download('punkt')
-    nltk.download('stopwords')
-
-download_nltk_resources()
-
-# Supported languages and their corresponding NLTK stopwords
+# Define supported languages and their corresponding stopword lists and stemmers
 LANGUAGES = {
-    "English": "english",
-    "French": "french",
-    "Italian": "italian",
-    "Spanish": "spanish"
+    "English": {"stopwords": get_stop_words("english"), "stemmer": stemmer("english")},
+    "French": {"stopwords": get_stop_words("french"), "stemmer": stemmer("french")},
+    "Italian": {"stopwords": get_stop_words("italian"), "stemmer": stemmer("italian")},
+    "Spanish": {"stopwords": get_stop_words("spanish"), "stemmer": stemmer("spanish")}
 }
 
-def preprocess_text(text, lang, remove_stopwords, stemmer, ngram_range, stop_words):
+def preprocess_text(text, lang, remove_stopwords, stemmer_obj, ngram_range, stop_words):
     """
     Tokenizes, removes stopwords, stems, and generates n-grams from the input text.
     """
-    # Tokenization
-    tokens = word_tokenize(text.lower())
-    # Keep only alphabetic tokens
-    tokens = [t for t in tokens if t.isalpha()]
-
+    # Tokenization using regex to extract words
+    tokens = re.findall(r'\b\w+\b', text.lower())
+    
     # Remove stopwords if requested
     if remove_stopwords and stop_words is not None:
-        tokens = [t for t in tokens if t not in stop_words]
-
-    # Stem tokens
-    stemmed_tokens = [stemmer.stem(t) for t in tokens]
-
+        tokens = [token for token in tokens if token not in stop_words]
+    
+    # Stemming
+    stemmed_tokens = [stemmer_obj.stemWord(token) for token in tokens]
+    
     # Generate n-grams
     final_terms = []
     for n in range(1, ngram_range + 1):
         for i in range(len(stemmed_tokens) - n + 1):
             ngram = "_".join(stemmed_tokens[i:i+n])
             final_terms.append(ngram)
-
+    
     return final_terms, tokens
 
 def find_most_frequent_original_forms(stem2original):
@@ -81,25 +70,28 @@ def load_data(uploaded_file):
     Loads data from the uploaded file based on its extension.
     """
     file_extension = uploaded_file.name.split('.')[-1].lower()
-    if file_extension == 'csv':
-        return pd.read_csv(uploaded_file)
-    elif file_extension in ['xlsx', 'xls']:
-        return pd.read_excel(uploaded_file)
-    elif file_extension == 'tsv':
-        return pd.read_csv(uploaded_file, sep='\t')
-    elif file_extension == 'txt':
-        return pd.read_csv(uploaded_file, sep='\n', header=None, names=['text'])
-    else:
-        raise ValueError("Unsupported file type.")
+    try:
+        if file_extension == 'csv':
+            return pd.read_csv(uploaded_file)
+        elif file_extension in ['xlsx', 'xls']:
+            return pd.read_excel(uploaded_file)
+        elif file_extension == 'tsv':
+            return pd.read_csv(uploaded_file, sep='\t')
+        elif file_extension == 'txt':
+            return pd.read_csv(uploaded_file, sep='\n', header=None, names=['text'])
+        else:
+            raise ValueError("Unsupported file type. Please upload a CSV, XLSX, TSV, or TXT file.")
+    except Exception as e:
+        raise ValueError(f"Error loading file: {e}")
 
 def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_range, alpha):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
     """
-    # Set up stopwords and stemmer
-    stop_words = set(stopwords.words(LANGUAGES[chosen_lang])) if remove_sw else None
-    stemmer = SnowballStemmer(LANGUAGES[chosen_lang])
-
+    # Retrieve stopwords and stemmer based on selected language
+    stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else None
+    stemmer_obj = LANGUAGES[chosen_lang]["stemmer"]
+    
     overall_freq = {}
     category_freq = {}
     category_counts = {}
@@ -120,7 +112,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             text,
             lang=chosen_lang,
             remove_stopwords=remove_sw,
-            stemmer=stemmer,
+            stemmer_obj=stemmer_obj,
             ngram_range=ngram_range,
             stop_words=stop_words
         )
@@ -138,7 +130,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         category_counts[cat] += len(terms)
         total_terms += len(terms)
 
-    # Exclude hapax legomena
+    # Exclude hapax legomena (words with global frequency = 1)
     overall_freq = {k: v for k, v in overall_freq.items() if v > 1}
     for cat in categories:
         category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq}
@@ -175,10 +167,11 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             all_K.append(K)
             all_n.append(n)
 
-    # Multiple testing correction
+    # Multiple testing correction (False Discovery Rate)
     pvals_array = np.array(all_pvals)
     reject, pvals_corrected, _, _ = multipletests(pvals_array, alpha=alpha, method='fdr_bh')
 
+    # Compile results
     final_data = []
     for i in range(len(all_terms)):
         t = all_terms[i]
@@ -188,8 +181,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         n = all_n[i]
         pval = pvals_corrected[i]
 
-        # Compute test-value
-        epsilon = 1e-9
+        # Compute test-value = log2((x/n)/(K/M))
+        epsilon = 1e-9  # To avoid division by zero
         term_ratio = x / (n + epsilon)
         global_ratio = K / (total_terms + epsilon)
         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
@@ -212,6 +205,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
 
     result_df = pd.DataFrame(final_data)
     result_df = result_df.sort_values(by=["Category", "P-Value"], ascending=[True, True])
+
     return result_df, categories, total_terms
 
 def visualize_results(result_df, categories):
@@ -224,6 +218,7 @@ def visualize_results(result_df, categories):
         if subset.empty:
             st.write(f"No significant characteristic words found for category **{cat}**.")
             continue
+        # Select top 10 based on absolute test value
         subset = subset.reindex(subset['Test-Value'].abs().sort_values(ascending=False).index)
         top_subset = subset.head(10)
 
@@ -245,7 +240,11 @@ def display_results(result_df, total_terms, categories, alpha):
     """
     st.write("### 📄 Characteristic Words Table")
     st.dataframe(result_df)
+
+    # Visualization
     visualize_results(result_df, categories)
+
+    # Summary statistics
     st.write("### 📈 Summary Statistics")
     st.write(f"**Total Terms in Corpus (excluding hapax):** {total_terms}")
     st.write(f"**Number of Categories:** {len(categories)}")
@@ -294,7 +293,7 @@ def main():
 
     st.sidebar.header("🔧 Configuration")
     uploaded_file = st.sidebar.file_uploader("📂 Upload Your Data", type=["csv", "xlsx", "tsv", "txt"])
-    
+
     if uploaded_file is not None:
         try:
             df = load_data(uploaded_file)
@@ -302,16 +301,19 @@ def main():
             st.sidebar.write("### Data Preview:")
             st.sidebar.dataframe(df.head())
 
+            # Column Selection
             text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
             category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
+            # Stopword Removal
             st.sidebar.write("### Stopword Removal")
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
             if remove_sw:
                 lang_choice = st.sidebar.selectbox("🌐 Select language for stopwords", list(LANGUAGES.keys()))
             else:
-                lang_choice = "English"
+                lang_choice = "English"  # Default language if stopword removal is not selected
 
+            # N-gram Selection
             st.sidebar.write("### N-gram Selection")
             ngram_option = st.sidebar.radio("Select N-grams to consider", 
                                             ["Unigrams only", "Unigrams + Bigrams", "Unigrams + Bigrams + Trigrams"])
@@ -322,8 +324,10 @@ def main():
             else:
                 ngram_range = 3
 
+            # Significance Level
             alpha = st.sidebar.number_input("📉 Significance level (alpha)", min_value=0.0001, max_value=0.5, value=0.05, step=0.01)
-            
+
+            # Run Analysis Button
             if st.sidebar.button("🚀 Run Analysis"):
                 st.header("🔍 Analysis Results")
                 st.write("### Processing...")
