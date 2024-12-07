@@ -8,6 +8,7 @@ from scipy.stats import hypergeom
 from io import StringIO, BytesIO
 import math
 import plotly.express as px
+import zipfile
 
 # Define supported languages and their corresponding stopword lists and stemmers
 LANGUAGES = {
@@ -19,7 +20,7 @@ LANGUAGES = {
 
 def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram_ranges, stop_words):
     """
-    Tokenizes, removes stopwords, stems, and generates n-grams from the input text.
+    Tokenizes, removes stopwords, stems (if enabled), and generates n-grams from the input text.
     """
     # Tokenization using regex to extract words
     tokens = re.findall(r'\b\w+\b', text.lower())
@@ -29,7 +30,7 @@ def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram
         tokens = [token for token in tokens if token not in stop_words]
     
     # Stemming if requested
-    if stem_words:
+    if stem_words and stemmer_obj is not None:
         stemmed_tokens = [stemmer_obj.stemWord(token) for token in tokens]
     else:
         stemmed_tokens = tokens.copy()
@@ -73,6 +74,36 @@ def benjamini_hochberg_correction(pvals, alpha=0.05):
     rejected[sorted_indices[:max_idx+1]] = True
     return rejected
 
+def apply_word_grouping(text, word_group_mapping):
+    """
+    Replace grouped words with their group name.
+    Grouped words are not stemmed.
+    """
+    if not word_group_mapping:
+        return text
+    # Flatten all grouped words
+    all_grouped_words = [word for words in word_group_mapping.values() for word in words]
+    # Sort by length descending to replace longer phrases first
+    all_grouped_words_sorted = sorted(all_grouped_words, key=lambda x: len(x), reverse=True)
+    # Escape special regex characters
+    all_grouped_words_escaped = [re.escape(word) for word in all_grouped_words_sorted]
+    # Create regex pattern with word boundaries
+    pattern = re.compile(r'\b(?:' + '|'.join(all_grouped_words_escaped) + r')\b', re.IGNORECASE)
+    
+    # Mapping from lowercase word to group name
+    word_to_group = {}
+    for group, words in word_group_mapping.items():
+        for word in words:
+            word_to_group[word.lower()] = group.lower()
+    
+    # Function to replace matched word with group name
+    def replace_match(match):
+        matched_word = match.group(0).lower()
+        return word_to_group.get(matched_word, matched_word)
+    
+    # Replace in text
+    return pattern.sub(replace_match, text)
+
 def add_footer():
     """
     Adds a footer with personal information and social links.
@@ -105,14 +136,17 @@ def load_data(uploaded_file):
     except Exception as e:
         raise ValueError(f"Error loading file: {e}")
 
-def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords, progress):
+def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords, word_group_mapping, progress):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
     Includes progress updates.
     """
-    # Update progress: Retrieval of stopwords and stemmer
-    progress.progress(10)
+    # Apply Word Grouping
+    progress.progress(5)
+    df[text_col] = df[text_col].astype(str).apply(lambda x: apply_word_grouping(x, word_group_mapping))
+    
     # Retrieve stopwords and stemmer based on selected language
+    progress.progress(10)
     stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else []
     stemmer_obj = LANGUAGES[chosen_lang]["stemmer"] if stem_words else None
     
@@ -137,11 +171,10 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
     word_freq = {}
 
     # Preprocessing and frequency counting
-    # Update progress: Start processing texts
-    progress.progress(25)
+    progress.progress(20)
     for idx, row in df.iterrows():
         cat = row[category_col]
-        text = str(row[text_col])
+        text = row[text_col]
         terms, tokens = preprocess_text(
             text,
             lang=chosen_lang,
@@ -162,7 +195,10 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             if n > len(tokens):
                 continue
             for i in range(len(tokens) - n + 1):
-                if stem_words:
+                if stem_words and n ==1:
+                    # If stemming and unigram, check if the term was grouped; already replaced
+                    ngram = "_".join([stemmer_obj.stemWord(token) for token in tokens[i:i+n]])
+                elif stem_words:
                     ngram = "_".join([stemmer_obj.stemWord(token) for token in tokens[i:i+n]])
                 else:
                     ngram = "_".join(tokens[i:i+n])
@@ -185,9 +221,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
         category_counts[cat] += len(selected_terms)
         total_terms += len(selected_terms)
 
-    # Update progress: Filtering frequencies
-    progress.progress(40)
-    # Exclude hapax legomena (words with global frequency = 1) and apply minimum frequency
+    # Filtering frequencies
+    progress.progress(35)
     overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1 and v >= min_freq}
     for cat in categories:
         category_freq[cat] = {k: v for k, v in category_freq[cat].items() if k in overall_freq_filtered}
@@ -198,8 +233,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
         stem2repr = {}
 
     # Statistical testing
-    # Update progress: Statistical analysis
-    progress.progress(60)
+    progress.progress(50)
     all_pvals = []
     all_terms = []
     all_cats = []
@@ -226,14 +260,12 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             all_K.append(K)
             all_n.append(n)
 
-    # Multiple testing correction using Benjamini-Hochberg
-    # Update progress: Multiple testing correction
-    progress.progress(75)
+    # Multiple testing correction
+    progress.progress(65)
     rejected = benjamini_hochberg_correction(all_pvals, alpha=alpha)
 
     # Compile results
-    # Update progress: Compiling results
-    progress.progress(85)
+    progress.progress(80)
     final_data = []
     for i in range(len(all_terms)):
         t = all_terms[i]
@@ -295,9 +327,11 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
         cat_types_set = set()
         for text in cat_df[text_col].dropna().astype(str):
             tokens = re.findall(r'\b\w+\b', text.lower())
+            # Apply Word Grouping
+            tokens = apply_word_grouping(' '.join(tokens), word_group_mapping).split()
             if remove_sw and stop_words:
                 tokens = [token for token in tokens if token not in stop_words]
-            if stem_words:
+            if stem_words and stemmer_obj is not None:
                 tokens = [stemmer_obj.stemWord(token) for token in tokens]
             cat_tokens += len(tokens)
             cat_types_set.update(tokens)
@@ -318,7 +352,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
 
 def visualize_results(result_df, categories):
     """
-    Generates horizontal bar plots for the most characteristic words per category.
+    Generates horizontal bar plots and interactive curves for the most characteristic words per category.
     """
     st.write("### 📊 Most Characteristic Words per Category")
     for cat in categories:
@@ -327,20 +361,68 @@ def visualize_results(result_df, categories):
             st.write(f"No significant characteristic words found for category **{cat}**.")
             continue
         # Select top 10 based on absolute test value
-        subset = subset.reindex(subset['Test Value'].abs().sort_values(ascending=False).index)
-        top_subset = subset.head(10)
-
-        fig = px.bar(
+        subset_sorted = subset.reindex(subset['Test Value'].abs().sort_values(ascending=False).index)
+        top_subset = subset_sorted.head(10)
+        
+        # Bar chart
+        fig_bar = px.bar(
             top_subset,
             x="Test Value",
             y="Term",
             orientation='h',
             title=f"Top Characteristic Words for Category: {cat}",
-            labels={"Test Value": "Test Value (log2((x/n)/(K/M)))", "Term": "Word"},
+            labels={"Test Value": "Test Value", "Term": "Word"},
             height=400
         )
-        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(fig, use_container_width=True)
+        fig_bar.update_layout(yaxis={'categoryorder': 'total ascending'})
+        
+        # Interactive curve: Scatter with lines
+        fig_curve = px.scatter(
+            subset,
+            x="Test Value",
+            y="Term",
+            title=f"Distribution of Test Values for Category: {cat}",
+            labels={"Test Value": "Test Value", "Term": "Word"},
+            hover_data=["Internal Frequency", "Global Frequency", "P-Value"],
+            height=400
+        )
+        fig_curve.update_traces(mode='lines+markers')
+        fig_curve.update_layout(showlegend=False)
+
+        # Combine bar and curve in subplot
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+
+        fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
+        # Add bar
+        fig_combined.add_trace(
+            go.Bar(
+                x=top_subset["Test Value"],
+                y=top_subset["Term"],
+                name="Test Value",
+                marker_color='indianred'
+            ),
+            secondary_y=False,
+        )
+        # Add scatter
+        fig_combined.add_trace(
+            go.Scatter(
+                x=subset["Test Value"],
+                y=subset["Term"],
+                mode='markers+lines',
+                name="Test Value Distribution",
+                marker=dict(color='blue')
+            ),
+            secondary_y=True,
+        )
+
+        fig_combined.update_layout(
+            title_text=f"Characteristic Words for Category: {cat}"
+        )
+        fig_combined.update_yaxes(title_text="Word", secondary_y=False)
+        fig_combined.update_yaxes(title_text="Test Value", secondary_y=True)
+
+        st.plotly_chart(fig_combined, use_container_width=True)
 
 def display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats):
     """
@@ -364,7 +446,9 @@ def display_results(result_df, total_tokens, num_categories, total_types, morpho
     - **Term:** The characteristic word or n-gram.
     - **Internal Frequency:** Number of times the term appears within the category.
     - **Global Frequency:** Number of times the term appears across the entire corpus.
-    - **Test Value:** Calculated as log2((x/n)/(K/M)) where:
+    - **Test Value:** 
+      $$\log_2\left(\frac{x/n}{K/M}\right)$$
+      where:
         - *x* = Internal Frequency
         - *n* = Total terms in the category
         - *K* = Global Frequency
@@ -396,31 +480,56 @@ def display_results(result_df, total_tokens, num_categories, total_types, morpho
 
 def download_results(result_df):
     """
-    Provides download buttons for CSV and Excel formats.
+    Provides download options for CSV, Excel, or both formats.
     """
     st.write("### ⬇️ Download Results")
     if result_df.empty:
         st.info("No results to download.")
         return
-    # CSV download
-    csv_buffer = StringIO()
-    result_df.to_csv(csv_buffer, index=False)
-    st.download_button(
-        label="📥 Download Results as CSV",
-        data=csv_buffer.getvalue(),
-        file_name="characteristic_words.csv",
-        mime="text/csv"
+    # Selection of download formats
+    download_options = st.multiselect(
+        "Select download format(s):",
+        options=["CSV", "Excel"],
+        default=["CSV"]
     )
-    # Excel download
-    excel_buffer = BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
-    st.download_button(
-        label="📥 Download Results as Excel",
-        data=excel_buffer.getvalue(),
-        file_name="characteristic_words.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    if download_options:
+        # Prepare data in selected formats
+        download_files = {}
+        if "CSV" in download_options:
+            csv_buffer = StringIO()
+            result_df.to_csv(csv_buffer, index=False)
+            download_files["characteristic_words.csv"] = csv_buffer.getvalue().encode('utf-8')
+        if "Excel" in download_options:
+            excel_buffer = BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                result_df.to_excel(writer, index=False, sheet_name='Characteristic Words')
+            download_files["characteristic_words.xlsx"] = excel_buffer.getvalue()
+        
+        # If multiple formats selected, zip them
+        if len(download_files) > 1:
+            # Create a zip file in memory
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zipf:
+                for filename, data in download_files.items():
+                    zipf.writestr(filename, data)
+            st.download_button(
+                label="📥 Download Selected Formats as ZIP",
+                data=zip_buffer.getvalue(),
+                file_name="characteristic_words.zip",
+                mime="application/zip"
+            )
+        else:
+            # Single format download
+            for filename, data in download_files.items():
+                mime_type = "text/csv" if filename.endswith('.csv') else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                st.download_button(
+                    label=f"📥 Download Results as {filename.split('.')[-1].upper()}",
+                    data=data,
+                    file_name=filename,
+                    mime=mime_type
+                )
+    else:
+        st.info("Select at least one format to download the results.")
 
 def main():
     """
@@ -451,14 +560,53 @@ def main():
         try:
             df = load_data(uploaded_file)
             st.sidebar.success("✅ File uploaded successfully!")
-            # Show data shape instead of preview
-            num_instances, num_features = df.shape
+            # Show data preview
             st.sidebar.write("### Data Preview:")
-            st.sidebar.write(f"**Shape:** {num_instances} instances, {num_features} features")
+            st.sidebar.dataframe(df.head())
 
             # Column Selection
             text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
             category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
+
+            # Word Grouping Section
+            st.sidebar.write("### Word Grouping")
+            if 'word_groups' not in st.session_state:
+                st.session_state['word_groups'] = []
+            # Button to add a new word group
+            if st.sidebar.button("➕ Add Word Group"):
+                st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': '', 'separator': ','})
+            # Display all word groups
+            for idx, group in enumerate(st.session_state['word_groups']):
+                st.sidebar.subheader(f"Group {idx+1}")
+                group['name'] = st.sidebar.text_input(f"Group {idx+1} Name", value=group['name'], key=f"group_name_{idx}")
+                group['method'] = st.sidebar.radio(f"Group {idx+1} Words Input Method", ["Type custom words", "Upload custom words file"], key=f"group_method_{idx}")
+                if group['method'] == "Type custom words":
+                    group['separator'] = st.sidebar.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
+                    group['words'] = st.sidebar.text_input(f"Group {idx+1} Words", value=group['words'], key=f"group_words_{idx}")
+                else:
+                    group_file = st.sidebar.file_uploader(f"Group {idx+1} Words File (.txt)", type=["txt"], key=f"group_file_{idx}")
+                    group['separator'] = st.sidebar.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
+                    if group_file and group['separator']:
+                        words_content = group_file.read().decode('utf-8')
+                        group['words'] = [word.strip() for word in words_content.split(group['separator']) if word.strip()]
+                    else:
+                        group['words'] = []
+                # Button to remove the group
+                if st.sidebar.button(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}"):
+                    st.session_state['word_groups'].pop(idx)
+                    st.experimental_rerun()
+
+            # Process word groups into a mapping
+            word_group_mapping = {}
+            for group in st.session_state['word_groups']:
+                group_name = group['name'].strip().lower()
+                if group_name:
+                    if group['method'] == "Type custom words":
+                        separator = group['separator']
+                        words = [word.strip().lower() for word in group['words'].split(separator) if word.strip()]
+                    else:
+                        words = group['words']  # already a list
+                    word_group_mapping[group_name] = words
 
             # Word Exclusion Section
             st.sidebar.write("### Word Exclusion")
@@ -535,7 +683,7 @@ def main():
                     progress = st.progress(0)
 
                     with st.spinner("🕒 Analyzing the corpus..."):
-                        result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats = perform_analysis(
+                        result = perform_analysis(
                             df,
                             text_col,
                             category_col,
@@ -546,10 +694,15 @@ def main():
                             min_freq,
                             alpha,
                             custom_stopwords,
+                            word_group_mapping,
                             progress
                         )
-                        display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats)
-                        download_results(result_df)
+                        if len(result) == 8:
+                            result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax, category_stats = result
+                            display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha, category_stats)
+                            download_results(result_df)
+                        else:
+                            st.error("Error during analysis.")
 
         except ValueError as ve:
             st.sidebar.error(f"⚠️ {ve}")
