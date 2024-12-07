@@ -102,10 +102,13 @@ def load_data(uploaded_file):
     except Exception as e:
         raise ValueError(f"Error loading file: {e}")
 
-def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords):
+def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_ranges, min_freq, alpha, custom_stopwords, progress):
     """
     Performs the characteristic words analysis and returns the result DataFrame.
+    Includes progress updates.
     """
+    # Update progress: Retrieval of stopwords and stemmer
+    progress.progress(10)
     # Retrieve stopwords and stemmer based on selected language
     stop_words = LANGUAGES[chosen_lang]["stopwords"] if remove_sw else []
     stemmer_obj = LANGUAGES[chosen_lang]["stemmer"]
@@ -113,7 +116,7 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
     # Add custom stopwords if provided
     if custom_stopwords:
         stop_words.extend(custom_stopwords)
-    
+
     overall_freq = {}
     category_freq = {}
     category_counts = {}
@@ -127,11 +130,13 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         category_freq[cat] = {}
         category_counts[cat] = 0
 
-    # Initialize word frequency for Types, Tokens, and Hapax
+    # Initialize word frequency for summary stats
     word_freq = {}
 
     # Preprocessing and frequency counting
-    for _, row in df.iterrows():
+    # Update progress: Start processing texts
+    progress.progress(25)
+    for idx, row in df.iterrows():
         cat = row[category_col]
         text = str(row[text_col])
         terms, tokens = preprocess_text(
@@ -158,7 +163,10 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
 
         # If unigrams are included, map stems to original forms
         if 1 in ngram_ranges:
-            for stemmed_token, orig in zip([term.split("_")[0] for term in selected_terms if '_' not in term], tokens):
+            for stemmed_token, orig in zip(
+                [term.split("_")[0] for term in selected_terms if '_' not in term],
+                tokens
+            ):
                 if stemmed_token not in stem2original:
                     stem2original[stemmed_token] = {}
                 stem2original[stemmed_token][orig] = stem2original[stemmed_token].get(orig, 0) + 1
@@ -170,6 +178,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         category_counts[cat] += len(selected_terms)
         total_terms += len(selected_terms)
 
+    # Update progress: Filtering frequencies
+    progress.progress(40)
     # Exclude hapax legomena (words with global frequency = 1) and apply minimum frequency
     overall_freq_filtered = {k: v for k, v in overall_freq.items() if v > 1 and v >= min_freq}
     for cat in categories:
@@ -181,6 +191,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         stem2repr = {}
 
     # Statistical testing
+    # Update progress: Statistical analysis
+    progress.progress(60)
     all_pvals = []
     all_terms = []
     all_cats = []
@@ -208,9 +220,13 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
             all_n.append(n)
 
     # Multiple testing correction using Benjamini-Hochberg
+    # Update progress: Multiple testing correction
+    progress.progress(75)
     rejected = benjamini_hochberg_correction(all_pvals, alpha=alpha)
 
     # Compile results
+    # Update progress: Compiling results
+    progress.progress(85)
     final_data = []
     for i in range(len(all_terms)):
         t = all_terms[i]
@@ -220,8 +236,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
         n = all_n[i]
         pval = all_pvals[i]
 
-        # Compute test-value = log2((x/n)/(K/M))
-        epsilon = 1e-9  # To avoid division by zero
+        # Compute test-value
+        epsilon = 1e-9
         term_ratio = x / (n + epsilon)
         global_ratio = K / (total_terms + epsilon)
         test_val = math.log2((term_ratio + epsilon) / (global_ratio + epsilon))
@@ -259,6 +275,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, chosen_lang, ngram_r
     morphological_complexity = round(total_types / total_tokens, 2) if total_tokens > 0 else 0.00
     num_hapax = sum(1 for freq in word_freq.values() if freq == 1)
 
+    # Update progress: Done
+    progress.progress(100)
     return result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax
 
 def visualize_results(result_df, categories):
@@ -394,6 +412,11 @@ def main():
             text_col = st.sidebar.selectbox("Select the text column", options=df.columns)
             category_col = st.sidebar.selectbox("Select the category column", options=df.columns)
 
+            # Check if chosen columns exist
+            if category_col not in df.columns:
+                st.sidebar.error(f"⚠️ The selected category column '{category_col}' does not exist in the uploaded dataset.")
+                st.stop()
+
             # Stopword Removal
             st.sidebar.write("### Stopword Removal")
             remove_sw = st.sidebar.checkbox("🗑️ Remove stopwords?", value=False)
@@ -460,6 +483,10 @@ def main():
                 else:
                     st.header("🔍 Analysis Results")
                     st.write("### Processing...")
+
+                    # Create a progress bar
+                    progress = st.progress(0)
+
                     with st.spinner("🕒 Analyzing the corpus..."):
                         result_df, categories, num_categories, total_tokens, total_types, morphological_complexity, num_hapax = perform_analysis(
                             df,
@@ -470,7 +497,8 @@ def main():
                             ngram_ranges,
                             min_freq,
                             alpha,
-                            custom_stopwords
+                            custom_stopwords,
+                            progress
                         )
                         display_results(result_df, total_tokens, num_categories, total_types, morphological_complexity, num_hapax, alpha)
                         download_results(result_df)
