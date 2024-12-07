@@ -27,6 +27,9 @@ LANGUAGES = {
     "Spanish": {"stopwords": stopwords.words("spanish")}
 }
 
+# Set page configuration at the very top
+st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
+
 def preprocess_text(text, lang, remove_stopwords, lemmatize, lemmatizer_obj, ngram_ranges, stop_words):
     """
     Tokenizes, removes stopwords (if requested), lemmatizes (if enabled),
@@ -388,9 +391,6 @@ def main():
     """
     Main function to run the Streamlit app.
     """
-    # Set page configuration at the very top
-    st.set_page_config(page_title="Characteristic Words Detection", layout="wide")
-
     st.title("📊 Characteristic Words Detection in Corpus Linguistics")
 
     st.markdown("""
