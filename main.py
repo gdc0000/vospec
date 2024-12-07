@@ -628,3 +628,7 @@ def main():
     if __name__ == "__main__":
         main()
         add_footer()
+        pass
+    except Exception as e:
+    # Handle the exception
+    print(f"An error occurred: {e}")
