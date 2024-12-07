@@ -4,7 +4,6 @@ import re
 from scipy.stats import hypergeom
 import math
 from io import BytesIO
-import plotly.express as px
 
 # Preprocess text: Tokenize and remove stopwords
 def preprocess_text(text, stop_words, ngram_levels):
@@ -158,6 +157,12 @@ def main():
 
                 st.subheader("Characteristic Words")
                 st.dataframe(results_df)
+
+                # Filter and sort results interactively
+                st.subheader("Interactive Characteristic Words Viewer")
+                selected_category = st.selectbox("Select a Category", options=results_df['Category'].unique())
+                sorted_results = results_df[results_df['Category'] == selected_category].sort_values(by="Test Value", ascending=False)
+                st.dataframe(sorted_results)
 
                 # Download results
                 excel_data = generate_excel_file(overall_freq, results_df)
