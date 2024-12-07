@@ -18,23 +18,23 @@ LANGUAGES = {
     "Spanish": {"stopwords": get_stop_words("spanish"), "stemmer": stemmer("spanish")}
 }
 
-def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram_ranges, stop_words):
+def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram_ranges, stop_words, group_names=None):
     """
-    Tokenizes, removes stopwords, stems (if enabled), and generates n-grams from the input text.
+    Tokenizes, removes stopwords, stems (if enabled and not in group_names), and generates n-grams from the input text.
     """
     # Tokenization using regex to extract words
     tokens = re.findall(r'\b\w+\b', text.lower())
-    
+
     # Remove stopwords if requested
-    if remove_stopwords and stop_words is not None:
+    if remove_sw and stop_words:
         tokens = [token for token in tokens if token not in stop_words]
-    
-    # Stemming if requested
+
+    # Stemming if requested and token not in group_names
     if stem_words and stemmer_obj is not None:
-        stemmed_tokens = [stemmer_obj.stemWord(token) for token in tokens]
+        stemmed_tokens = [stemmer_obj.stemWord(token) if not group_names or token not in group_names else token for token in tokens]
     else:
         stemmed_tokens = tokens.copy()
-    
+
     # Generate n-grams based on selected ranges
     final_terms = []
     for n in ngram_ranges:
@@ -43,7 +43,7 @@ def preprocess_text(text, lang, remove_stopwords, stem_words, stemmer_obj, ngram
         for i in range(len(stemmed_tokens) - n + 1):
             ngram = "_".join(stemmed_tokens[i:i+n])
             final_terms.append(ngram)
-    
+
     return final_terms, tokens
 
 def find_most_frequent_original_forms(stem2original):
@@ -89,18 +89,18 @@ def apply_word_grouping(text, word_group_mapping):
     all_grouped_words_escaped = [re.escape(word) for word in all_grouped_words_sorted]
     # Create regex pattern with word boundaries
     pattern = re.compile(r'\b(?:' + '|'.join(all_grouped_words_escaped) + r')\b', re.IGNORECASE)
-    
+
     # Mapping from lowercase word to group name
     word_to_group = {}
     for group, words in word_group_mapping.items():
         for word in words:
             word_to_group[word.lower()] = group.lower()
-    
+
     # Function to replace matched word with group name
     def replace_match(match):
         matched_word = match.group(0).lower()
         return word_to_group.get(matched_word, matched_word)
-    
+
     # Replace in text
     return pattern.sub(replace_match, text)
 
@@ -170,6 +170,9 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
     # Initialize word frequency for summary stats
     word_freq = {}
 
+    # Extract group names to skip stemming
+    group_names = set(word_group_mapping.keys())
+
     # Preprocessing and frequency counting
     progress.progress(20)
     for idx, row in df.iterrows():
@@ -182,7 +185,8 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             stem_words=stem_words,
             stemmer_obj=stemmer_obj,
             ngram_ranges=ngram_ranges,
-            stop_words=stop_words
+            stop_words=stop_words,
+            group_names=group_names
         )
 
         # Update word frequency
@@ -195,13 +199,20 @@ def perform_analysis(df, text_col, category_col, remove_sw, stem_words, chosen_l
             if n > len(tokens):
                 continue
             for i in range(len(tokens) - n + 1):
-                if stem_words and n ==1:
-                    # If stemming and unigram, check if the term was grouped; already replaced
-                    ngram = "_".join([stemmer_obj.stemWord(token) for token in tokens[i:i+n]])
+                if stem_words and n == 1:
+                    # If stemming and unigram, ensure group names are not stemmed
+                    token = tokens[i]
+                    if token in group_names:
+                        ngram = token
+                    else:
+                        ngram = stemmer_obj.stemWord(token)
                 elif stem_words:
-                    ngram = "_".join([stemmer_obj.stemWord(token) for token in tokens[i:i+n]])
+                    ngram = stemmer_obj.stemWord(tokens[i])
                 else:
-                    ngram = "_".join(tokens[i:i+n])
+                    ngram = tokens[i]
+                # For n-grams
+                if n > 1:
+                    ngram = "_".join(stemmer_obj.stemWord(tok) if stem_words and tok not in group_names else tok for tok in tokens[i:i+n])
                 selected_terms.append(ngram)
 
         # If unigrams are included and stemming is applied, map stems to original forms
@@ -526,40 +537,42 @@ def main():
                 st.session_state['word_groups'] = []
             # Button to add a new word group
             if st.sidebar.button("➕ Add Word Group"):
-                st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': '', 'separator': ','})
+                st.session_state['word_groups'].append({'name': '', 'method': 'Type custom words', 'words': [], 'separator': ','})
             # Display all word groups
             for idx, group in enumerate(st.session_state['word_groups']):
-                st.sidebar.subheader(f"Group {idx+1}")
-                group['name'] = st.sidebar.text_input(f"Group {idx+1} Name", value=group['name'], key=f"group_name_{idx}")
-                group['method'] = st.sidebar.radio(f"Group {idx+1} Words Input Method", ["Type custom words", "Upload custom words file"], key=f"group_method_{idx}")
-                if group['method'] == "Type custom words":
-                    group['separator'] = st.sidebar.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
-                    group['words'] = st.sidebar.text_input(f"Group {idx+1} Words", value=group['words'], key=f"group_words_{idx}")
-                else:
-                    group_file = st.sidebar.file_uploader(f"Group {idx+1} Words File (.txt)", type=["txt"], key=f"group_file_{idx}")
-                    group['separator'] = st.sidebar.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
-                    if group_file and group['separator']:
-                        words_content = group_file.read().decode('utf-8')
-                        group['words'] = [word.strip() for word in words_content.split(group['separator']) if word.strip()]
+                with st.sidebar.expander(f"Group {idx+1}", expanded=True):
+                    group['name'] = st.text_input(f"Group {idx+1} Name", value=group['name'], key=f"group_name_{idx}")
+                    group['method'] = st.radio(f"Group {idx+1} Words Input Method", ["Type custom words", "Upload custom words file"], key=f"group_method_{idx}")
+                    if group['method'] == "Type custom words":
+                        group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
+                        group_words = st.text_input(f"Group {idx+1} Words", value=", ".join(group['words']), key=f"group_words_{idx}")
+                        # Update words list based on input
+                        if group_words:
+                            group['words'] = [word.strip().lower() for word in group_words.split(group['separator']) if word.strip()]
+                        else:
+                            group['words'] = []
                     else:
-                        group['words'] = []
-                # Button to remove the group
-                if st.sidebar.button(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}"):
-                    st.session_state['word_groups'].pop(idx)
-                    st.experimental_rerun()
+                        group_file = st.file_uploader(f"Group {idx+1} Words File (.txt)", type=["txt"], key=f"group_file_{idx}")
+                        group['separator'] = st.text_input(f"Group {idx+1} Separator", value=",", key=f"group_sep_{idx}")
+                        if group_file and group['separator']:
+                            words_content = group_file.read().decode('utf-8')
+                            group['words'] = [word.strip().lower() for word in words_content.split(group['separator']) if word.strip()]
+                        elif group['words'] is None:
+                            group['words'] = []
+                    # Button to remove the group
+                    if st.button(f"🗑️ Remove Group {idx+1}", key=f"remove_group_{idx}"):
+                        st.session_state['word_groups'].pop(idx)
+                        st.experimental_rerun()
 
             # Process word groups into a mapping
             word_group_mapping = {}
             for group in st.session_state['word_groups']:
                 group_name = group['name'].strip().lower()
-                if group_name:
-                    if group['method'] == "Type custom words":
-                        separator = group['separator']
-                        words = [word.strip().lower() for word in group['words'].split(separator) if word.strip()]
-                    else:
-                        words = group['words']  # already a list
-                    word_group_mapping[group_name] = words
-
+                if group_name and '_' not in group_name:
+                    word_group_mapping[group_name] = group['words']
+                elif group_name and '_' in group_name:
+                    st.sidebar.error(f"Group name '{group['name']}' should not contain underscores '_'. Please rename it.")
+            
             # Word Exclusion Section
             st.sidebar.write("### Word Exclusion")
             # Custom Stopword List Options
@@ -572,17 +585,17 @@ def main():
             custom_stopwords = []
             
             if custom_stopword_option == "Type custom stopwords":
-                separator = st.sidebar.text_input("📝 Enter a custom separator (e.g., comma, space):", value=",")
+                separator_sw = st.sidebar.text_input("📝 Enter a custom separator (e.g., comma, space):", value=",")
                 custom_stopword_input = st.sidebar.text_input("✍️ Enter custom stopwords separated by your chosen separator:")
                 if custom_stopword_input:
-                    custom_stopwords = [word.strip() for word in custom_stopword_input.split(separator) if word.strip()]
+                    custom_stopwords = [word.strip().lower() for word in custom_stopword_input.split(separator_sw) if word.strip()]
             
             elif custom_stopword_option == "Upload custom stopwords file":
                 uploaded_stopword_file = st.sidebar.file_uploader("📂 Upload a custom stopwords file (.txt):", type=["txt"])
-                separator = st.sidebar.text_input("📝 Enter the separator used in your file (e.g., comma, space):", value=",")
-                if uploaded_stopword_file and separator:
+                separator_sw = st.sidebar.text_input("📝 Enter the separator used in your file (e.g., comma, space):", value=",")
+                if uploaded_stopword_file and separator_sw:
                     stopword_content = uploaded_stopword_file.read().decode('utf-8')
-                    custom_stopwords = [word.strip() for word in stopword_content.split(separator) if word.strip()]
+                    custom_stopwords = [word.strip().lower() for word in stopword_content.split(separator_sw) if word.strip()]
 
             # Stopword Removal Section
             st.sidebar.write("### Stopword Removal")
@@ -627,6 +640,8 @@ def main():
             if st.sidebar.button("🚀 Run Analysis"):
                 if not ngram_ranges:
                     st.error("⚠️ Please select at least one N-gram option to proceed.")
+                elif not text_col or not category_col:
+                    st.error("⚠️ Please select both text and category columns.")
                 else:
                     st.header("🔍 Analysis Results")
                     st.write("### Processing...")
