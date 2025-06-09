@@ -6,3 +6,4 @@ snowballstemmer>=2.1.0
 scipy>=1.10.1
 plotly>=5.17.0
 openpyxl>=3.1.2
+nltk
